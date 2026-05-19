@@ -327,6 +327,7 @@
         || HOSTED_CHECKOUT_VERIFICATION_CODE_ENDPOINT
         || ''
       ).trim();
+      await addLog(`步骤 6：当前 hosted checkout 验证码接口配置为 ${verificationUrl || '(空)'}。`, 'info');
       const fetcher = typeof fetchImpl === 'function'
         ? fetchImpl
         : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
@@ -544,6 +545,8 @@
 
         if (pageState.hostedStage === 'guest_checkout') {
           const latestState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+          const configuredPhone = String(latestState?.hostedCheckoutPhoneNumber || '').trim();
+          await addLog(`步骤 6：当前 hosted checkout 电话配置为 ${configuredPhone || '(空，将回退默认值)'}。`, 'info');
           await addLog('步骤 6：检测到 PayPal hosted checkout 卡支付页，正在填写卡资料并提交...', 'info');
           await runHostedCheckoutPayPalStep(tabId, {
             ...guestProfile,

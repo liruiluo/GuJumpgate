@@ -11,6 +11,7 @@ const PAYPAL_HOSTED_STAGE_VERIFICATION = 'verification';
 const PAYPAL_HOSTED_STAGE_REVIEW = 'review_consent';
 const PAYPAL_HOSTED_STAGE_APPROVAL = 'approval';
 const PAYPAL_HOSTED_STAGE_UNKNOWN = 'unknown';
+const PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_HERMES_AUTORUN__';
 
 if (document.documentElement.getAttribute(PAYPAL_FLOW_LISTENER_SENTINEL) !== '1') {
   document.documentElement.setAttribute(PAYPAL_FLOW_LISTENER_SENTINEL, '1');
@@ -682,6 +683,32 @@ async function runHostedCheckoutStep(payload = {}) {
   };
 }
 
+function shouldAutoRunHostedHermesReview() {
+  const rootScope = typeof window !== 'undefined' ? window : globalThis;
+  if (!isPayPalHostedReviewPage()) {
+    return false;
+  }
+  if (rootScope[PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL]) {
+    return false;
+  }
+  rootScope[PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL] = true;
+  return true;
+}
+
+function scheduleHostedHermesAutoRun() {
+  if (!shouldAutoRunHostedHermesReview()) {
+    return;
+  }
+  log('PayPal Hermes 页面已命中，按油猴脚本方式自动等待并点击 Agree and Continue。', 'info');
+  setTimeout(() => {
+    clickHostedReviewConsent().then(() => {
+      log('PayPal Hermes：已按油猴脚本方式执行 Agree and Continue。', 'ok');
+    }).catch((error) => {
+      log(`PayPal Hermes：自动点击 Agree and Continue 失败：${error?.message || error}`, 'warn');
+    });
+  }, 0);
+}
+
 function findPasskeyPromptButtons() {
   const promptPatterns = [
     /passkey|通行密钥|安全密钥|下次登录|faster|save/i,
@@ -905,3 +932,5 @@ function inspectPayPalState() {
     bodyTextPreview: normalizeText(document.body?.innerText || '').slice(0, 240),
   };
 }
+
+scheduleHostedHermesAutoRun();

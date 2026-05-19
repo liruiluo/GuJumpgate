@@ -13,7 +13,6 @@ const PAYPAL_HOSTED_STAGE_APPROVAL = 'approval';
 const PAYPAL_HOSTED_STAGE_UNKNOWN = 'unknown';
 const PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_HERMES_AUTORUN__';
 const PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_GUEST_SUBMIT__';
-const PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_HERMES_WATCHER__';
 
 if (document.documentElement.getAttribute(PAYPAL_FLOW_LISTENER_SENTINEL) !== '1') {
   document.documentElement.setAttribute(PAYPAL_FLOW_LISTENER_SENTINEL, '1');
@@ -574,6 +573,7 @@ async function fillHostedGuestCheckout(payload = {}) {
   await waitForDocumentComplete();
   startHostedCaptchaCleanupObserver();
   removeHostedCaptchaArtifacts();
+  log(`PayPal guest checkout：收到 payload.phone=${String(payload?.phone || '').trim() || '(空)'}，payload.address=${JSON.stringify(payload?.address || {})}`, 'info');
 
   await sleep(2000);
   const countrySelect = document.getElementById('country');
@@ -728,64 +728,6 @@ function scheduleHostedHermesAutoRun() {
       log(`PayPal Hermes：自动点击 Agree and Continue 失败：${error?.message || error}`, 'warn');
     });
   }, 0);
-}
-
-function installHostedHermesReviewWatcher() {
-  const rootScope = typeof window !== 'undefined' ? window : globalThis;
-  if (!isPayPalHostedReviewPage()) {
-    return;
-  }
-  if (rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL]) {
-    return;
-  }
-  rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL] = true;
-  console.log('[MultiPage:paypal-flow] Hosted Hermes review watcher installed on', location.href);
-  log(`PayPal Hermes：已安装页面内轮询器。当前 URL：${location.href}`, 'info');
-
-  let waited = 0;
-  const timer = setInterval(() => {
-    if (!isPayPalHostedReviewPage()) {
-      clearInterval(timer);
-      rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL] = false;
-      return;
-    }
-    waited += 1;
-    const pageText = document.body ? document.body.innerText : '';
-    if (String(pageText || '').includes('Set up once. Pay faster next time')) {
-      clearInterval(timer);
-      log(`PayPal Hermes：页面内轮询器在第 ${waited}/30 秒命中目标文案。`, 'info');
-      let button = document.getElementById('consentButton')
-        || document.querySelector('button[data-testid="consentButton"]');
-      if (button) {
-        log('PayPal Hermes：页面内轮询器已找到 consentButton，执行点击。', 'info');
-        button.click();
-        log('PayPal Hermes：页面内轮询器已执行 Agree and Continue。', 'ok');
-        rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL] = false;
-        return;
-      }
-      log('PayPal Hermes：页面内轮询器首次未找到 consentButton，2 秒后重试一次。', 'warn');
-      setTimeout(() => {
-        button = document.getElementById('consentButton');
-        if (button) {
-          log('PayPal Hermes：页面内轮询器重试后找到 consentButton，执行点击。', 'info');
-          button.click();
-          log('PayPal Hermes：页面内轮询器重试后已执行 Agree and Continue。', 'ok');
-        } else {
-          log('PayPal Hermes：页面内轮询器重试后仍未找到 consentButton。', 'warn');
-        }
-        rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL] = false;
-      }, 2000);
-      return;
-    }
-    if (waited === 1 || waited % 5 === 0) {
-      log(`PayPal Hermes：页面内轮询器尚未命中目标文案（${waited}/30）。`, 'info');
-    }
-    if (waited >= 30) {
-      clearInterval(timer);
-      log('PayPal Hermes：页面内轮询器等待 30 秒后仍未命中目标文案。', 'warn');
-      rootScope[PAYPAL_HOSTED_HERMES_WATCHER_SENTINEL] = false;
-    }
-  }, 1000);
 }
 
 function findPasskeyPromptButtons() {
@@ -1013,4 +955,3 @@ function inspectPayPalState() {
 }
 
 scheduleHostedHermesAutoRun();
-installHostedHermesReviewWatcher();

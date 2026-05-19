@@ -570,6 +570,10 @@
           const runtimeConfig = await getHostedCheckoutRuntimeConfig();
           const configuredPhone = String(runtimeConfig?.phone || '').trim();
           await addLog(`步骤 6：当前 hosted checkout 电话配置为 ${configuredPhone || '(空，将回退默认值)'}。`, 'info');
+          await addLog(`步骤 6：发送到 PayPal guest checkout 的 payload：${JSON.stringify({
+            phone: String(runtimeConfig?.phone || guestProfile.phone || '').trim(),
+            address: guestProfile.address || {},
+          })}`, 'info');
           await addLog('步骤 6：检测到 PayPal hosted checkout 卡支付页，正在填写卡资料并提交...', 'info');
           await runHostedCheckoutPayPalStep(tabId, {
             ...guestProfile,

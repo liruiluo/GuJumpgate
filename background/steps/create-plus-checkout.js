@@ -540,7 +540,7 @@
         }
 
         if (isPayPalHermesUrl(currentUrl)) {
-          await addLog('步骤 6：检测到 PayPal Hermes 复核页，按油猴脚本方式直接等待并点击 Agree and Continue...', 'info');
+          await addLog(`步骤 6：检测到 PayPal Hermes 复核页（${currentUrl}），按油猴脚本方式直接等待并点击 Agree and Continue...`, 'info');
           await runHostedCheckoutPayPalStep(tabId, {});
           await sleepWithStop(1000);
           continue;

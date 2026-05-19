@@ -633,33 +633,43 @@ async function fillHostedGuestCheckout(payload = {}) {
 
 async function clickHostedReviewConsent() {
   await waitForDocumentComplete();
+  log(`PayPal Hermes：开始等待账单确认文案。当前 URL：${location.href}`, 'info');
   let waited = 0;
   while (waited < 30) {
     waited += 1;
     const pageText = document.body ? document.body.innerText : '';
     if (String(pageText || '').includes('Set up once. Pay faster next time')) {
+      log(`PayPal Hermes：第 ${waited}/30 秒命中目标文案，开始寻找 consentButton。`, 'info');
       let button = document.getElementById('consentButton')
         || document.querySelector('button[data-testid="consentButton"]');
       if (button) {
+        log('PayPal Hermes：已找到 consentButton，准备点击 Agree and Continue。', 'info');
         button.click();
         return {
           stage: PAYPAL_HOSTED_STAGE_REVIEW,
           submitted: true,
         };
       }
+      log('PayPal Hermes：首次未找到 consentButton，2 秒后重试一次。', 'warn');
       await sleep(2000);
       button = document.getElementById('consentButton');
       if (button) {
+        log('PayPal Hermes：重试后找到 consentButton，准备点击 Agree and Continue。', 'info');
         button.click();
         return {
           stage: PAYPAL_HOSTED_STAGE_REVIEW,
           submitted: true,
         };
       }
+      log('PayPal Hermes：重试后仍未找到 consentButton。', 'warn');
       throw new Error('PayPal hosted checkout 未找到 consentButton。');
+    }
+    if (waited === 1 || waited % 5 === 0) {
+      log(`PayPal Hermes：尚未命中目标文案，继续等待（${waited}/30）。`, 'info');
     }
     await sleep(1000);
   }
+  log('PayPal Hermes：等待 30 秒后仍未命中目标文案。', 'warn');
   throw new Error('PayPal hosted checkout 账单确认页超时，未检测到目标文案。');
 }
 
@@ -709,7 +719,7 @@ function scheduleHostedHermesAutoRun() {
   if (!shouldAutoRunHostedHermesReview()) {
     return;
   }
-  log('PayPal Hermes 页面已命中，按油猴脚本方式自动等待并点击 Agree and Continue。', 'info');
+  log(`PayPal Hermes 页面已命中，按油猴脚本方式自动等待并点击 Agree and Continue。当前 URL：${location.href}`, 'info');
   setTimeout(() => {
     clickHostedReviewConsent().then(() => {
       log('PayPal Hermes：已按油猴脚本方式执行 Agree and Continue。', 'ok');

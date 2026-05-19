@@ -34,6 +34,7 @@
       ensureContentScriptReadyOnTabUntilStopped,
       failNodeFromBackground = null,
       fetch: fetchImpl = null,
+      getState = null,
       registerTab,
       sendTabMessageUntilStopped,
       setState,
@@ -274,12 +275,12 @@
       };
     }
 
-    function buildHostedCheckoutGuestProfile(address = {}) {
+    function buildHostedCheckoutGuestProfile(address = {}, state = {}) {
       const card = buildHostedCheckoutVisaCard();
       return {
         email: buildHostedCheckoutRandomEmail(),
         password: buildHostedCheckoutRandomPassword(),
-        phone: HOSTED_CHECKOUT_PAYPAL_DEFAULT_PHONE,
+        phone: String(state?.hostedCheckoutPhoneNumber || HOSTED_CHECKOUT_PAYPAL_DEFAULT_PHONE || '').trim(),
         firstName: 'James',
         lastName: 'Smith',
         fullName: 'James Smith',
@@ -316,13 +317,23 @@
     }
 
     async function fetchHostedCheckoutVerificationCode() {
+      const runtimeState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+      const verificationUrl = String(
+        runtimeState?.hostedCheckoutVerificationUrl
+        || HOSTED_CHECKOUT_VERIFICATION_CODE_ENDPOINT
+        || ''
+      ).trim();
       const fetcher = typeof fetchImpl === 'function'
         ? fetchImpl
         : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
       if (typeof fetcher !== 'function') {
         throw new Error('当前运行环境不支持 fetch，无法获取 hosted checkout 验证码。');
       }
-      const response = await fetcher(`${HOSTED_CHECKOUT_VERIFICATION_CODE_ENDPOINT}?t=${Date.now()}`, {
+      if (!verificationUrl) {
+        throw new Error('当前未配置 hosted checkout 验证码接口地址。');
+      }
+      const separator = verificationUrl.includes('?') ? '&' : '?';
+      const response = await fetcher(`${verificationUrl}${separator}t=${Date.now()}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json,text/plain,*/*',
@@ -544,8 +555,9 @@
     }
 
     async function runHostedCheckoutAutomation(tabId) {
+      const runtimeState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
       const address = await fetchHostedCheckoutAddress();
-      const guestProfile = buildHostedCheckoutGuestProfile(address);
+      const guestProfile = buildHostedCheckoutGuestProfile(address, runtimeState);
       await runHostedCheckoutOpenAiFlow(tabId, guestProfile);
 
       const transitionTab = await waitForUrlMatch(

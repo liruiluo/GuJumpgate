@@ -299,6 +299,16 @@
           <span class="setting-caption">检测到支付成功页后，等待多少秒再进入 OAuth；0 = 立即继续</span>
         </div>
       </div>
+      <div class="data-row" id="row-hosted-checkout-verification-url" style="display:none;">
+        <span class="data-label">验证码接口</span>
+        <input type="text" id="input-hosted-checkout-verification-url" class="data-input"
+          placeholder="https://mail-api.yuecheng.shop/api/text-relay/..." />
+      </div>
+      <div class="data-row" id="row-hosted-checkout-phone" style="display:none;">
+        <span class="data-label">PayPal 电话</span>
+        <input type="text" id="input-hosted-checkout-phone" class="data-input mono"
+          placeholder="1234567890" />
+      </div>
       <div class="data-row" id="row-gpc-helper-api" style="display:none;">
         <span class="data-label">GPC API</span>
         <div class="data-inline">

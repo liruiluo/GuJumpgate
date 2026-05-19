@@ -178,6 +178,10 @@ const plusPaymentMethodCaption = document.getElementById('plus-payment-method-ca
 const rowPayPalAccount = document.getElementById('row-paypal-account');
 const rowPlusHostedCheckoutOauthDelay = document.getElementById('row-plus-hosted-checkout-oauth-delay');
 const inputPlusHostedCheckoutOauthDelaySeconds = document.getElementById('input-plus-hosted-checkout-oauth-delay-seconds');
+const rowHostedCheckoutVerificationUrl = document.getElementById('row-hosted-checkout-verification-url');
+const inputHostedCheckoutVerificationUrl = document.getElementById('input-hosted-checkout-verification-url');
+const rowHostedCheckoutPhone = document.getElementById('row-hosted-checkout-phone');
+const inputHostedCheckoutPhone = document.getElementById('input-hosted-checkout-phone');
 const selectPayPalAccount = document.getElementById('select-paypal-account');
 const payPalAccountPickerRoot = document.getElementById('paypal-account-picker');
 const btnPayPalAccountMenu = document.getElementById('btn-paypal-account-menu');
@@ -2764,6 +2768,14 @@ function normalizePlusHostedCheckoutOauthDelaySeconds(value) {
   return Math.min(3600, Math.max(0, Math.floor(numeric)));
 }
 
+function normalizeHostedCheckoutVerificationUrlValue(value = '') {
+  return String(value || '').trim();
+}
+
+function normalizeHostedCheckoutPhoneValue(value = '') {
+  return String(value || '').trim();
+}
+
 function normalizeVerificationResendCount(value, fallback) {
   const rawValue = String(value ?? '').trim();
   if (!rawValue) {
@@ -4008,6 +4020,12 @@ function collectSettingsPayload() {
     plusHostedCheckoutOauthDelaySeconds: inputPlusHostedCheckoutOauthDelaySeconds
       ? normalizePlusHostedCheckoutOauthDelaySeconds(inputPlusHostedCheckoutOauthDelaySeconds.value)
       : 0,
+    hostedCheckoutVerificationUrl: inputHostedCheckoutVerificationUrl
+      ? normalizeHostedCheckoutVerificationUrlValue(inputHostedCheckoutVerificationUrl.value)
+      : '',
+    hostedCheckoutPhoneNumber: inputHostedCheckoutPhone
+      ? normalizeHostedCheckoutPhoneValue(inputHostedCheckoutPhone.value)
+      : '',
     oauthFlowTimeoutEnabled: typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled
       ? Boolean(inputOAuthFlowTimeoutEnabled.checked)
       : true,
@@ -8298,6 +8316,8 @@ function updatePlusModeUI() {
   });
   [
     typeof rowPlusHostedCheckoutOauthDelay !== 'undefined' ? rowPlusHostedCheckoutOauthDelay : null,
+    typeof rowHostedCheckoutVerificationUrl !== 'undefined' ? rowHostedCheckoutVerificationUrl : null,
+    typeof rowHostedCheckoutPhone !== 'undefined' ? rowHostedCheckoutPhone : null,
   ].forEach((row) => {
     if (!row) {
       return;
@@ -9483,6 +9503,12 @@ function applySettingsState(state) {
     inputPlusHostedCheckoutOauthDelaySeconds.value = String(
       normalizePlusHostedCheckoutOauthDelaySeconds(state?.plusHostedCheckoutOauthDelaySeconds)
     );
+  }
+  if (inputHostedCheckoutVerificationUrl) {
+    inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(state?.hostedCheckoutVerificationUrl || '');
+  }
+  if (inputHostedCheckoutPhone) {
+    inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(state?.hostedCheckoutPhoneNumber || '');
   }
   if (typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
     inputOAuthFlowTimeoutEnabled.checked = state?.oauthFlowTimeoutEnabled !== undefined
@@ -14339,6 +14365,24 @@ inputPlusHostedCheckoutOauthDelaySeconds?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputHostedCheckoutVerificationUrl?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHostedCheckoutVerificationUrl?.addEventListener('blur', () => {
+  inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(inputHostedCheckoutVerificationUrl.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputHostedCheckoutPhone?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHostedCheckoutPhone?.addEventListener('blur', () => {
+  inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(inputHostedCheckoutPhone.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputVerificationResendCount?.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -15316,6 +15360,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         inputPlusHostedCheckoutOauthDelaySeconds.value = String(
           normalizePlusHostedCheckoutOauthDelaySeconds(message.payload.plusHostedCheckoutOauthDelaySeconds)
         );
+      }
+      if (message.payload.hostedCheckoutVerificationUrl !== undefined && inputHostedCheckoutVerificationUrl) {
+        inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(message.payload.hostedCheckoutVerificationUrl);
+      }
+      if (message.payload.hostedCheckoutPhoneNumber !== undefined && inputHostedCheckoutPhone) {
+        inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(message.payload.hostedCheckoutPhoneNumber);
       }
       if (message.payload.oauthFlowTimeoutEnabled !== undefined && typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
         inputOAuthFlowTimeoutEnabled.checked = Boolean(message.payload.oauthFlowTimeoutEnabled);

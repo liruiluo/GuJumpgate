@@ -891,6 +891,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   plusModeEnabled: false,
   plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
   plusHostedCheckoutOauthDelaySeconds: 0,
+  hostedCheckoutVerificationUrl: 'https://mail-api.yuecheng.shop/api/text-relay/eca_tr_OvAY5TRAW8mdN2is0ApJ1Tg7',
+  hostedCheckoutPhoneNumber: '1234567890',
   paypalEmail: '',
   paypalPassword: '',
   currentPayPalAccountId: '',
@@ -2773,6 +2775,10 @@ function normalizePersistentSettingValue(key, value) {
         value,
         PERSISTED_SETTING_DEFAULTS.plusHostedCheckoutOauthDelaySeconds
       );
+    case 'hostedCheckoutVerificationUrl':
+      return String(value || '').trim();
+    case 'hostedCheckoutPhoneNumber':
+      return String(value || '').trim();
     case 'paypalEmail':
       return String(value || '').trim();
     case 'paypalPassword':
@@ -12492,6 +12498,7 @@ const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.c
   ensureContentScriptReadyOnTabUntilStopped,
   failNodeFromBackground,
   fetch: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  getState,
   getLastNodeIdForState,
   markCurrentRegistrationAccountUsed,
   registerTab,

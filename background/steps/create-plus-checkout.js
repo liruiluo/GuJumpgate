@@ -101,6 +101,33 @@
       return /paypal\.com\/webapps\/hermes/i.test(String(url || ''));
     }
 
+    async function getHostedCheckoutRuntimeConfig() {
+      const state = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+      let stored = {};
+      if (chrome?.storage?.local?.get) {
+        stored = await chrome.storage.local.get([
+          'hostedCheckoutVerificationUrl',
+          'hostedCheckoutPhoneNumber',
+        ]).catch(() => ({}));
+      }
+      const verificationUrl = String(
+        stored?.hostedCheckoutVerificationUrl
+        || state?.hostedCheckoutVerificationUrl
+        || HOSTED_CHECKOUT_VERIFICATION_CODE_ENDPOINT
+        || ''
+      ).trim();
+      const phone = String(
+        stored?.hostedCheckoutPhoneNumber
+        || state?.hostedCheckoutPhoneNumber
+        || HOSTED_CHECKOUT_PAYPAL_DEFAULT_PHONE
+        || ''
+      ).trim();
+      return {
+        verificationUrl,
+        phone,
+      };
+    }
+
     async function waitForCheckoutSurface(tabId) {
       if (!chrome?.tabs?.get) {
         return null;
@@ -279,12 +306,12 @@
       };
     }
 
-    function buildHostedCheckoutGuestProfile(address = {}, state = {}) {
+    function buildHostedCheckoutGuestProfile(address = {}, config = {}) {
       const card = buildHostedCheckoutVisaCard();
       return {
         email: buildHostedCheckoutRandomEmail(),
         password: buildHostedCheckoutRandomPassword(),
-        phone: String(state?.hostedCheckoutPhoneNumber || HOSTED_CHECKOUT_PAYPAL_DEFAULT_PHONE || '').trim(),
+        phone: String(config?.phone || HOSTED_CHECKOUT_PAYPAL_DEFAULT_PHONE || '').trim(),
         firstName: 'James',
         lastName: 'Smith',
         fullName: 'James Smith',
@@ -321,12 +348,8 @@
     }
 
     async function fetchHostedCheckoutVerificationCode() {
-      const runtimeState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
-      const verificationUrl = String(
-        runtimeState?.hostedCheckoutVerificationUrl
-        || HOSTED_CHECKOUT_VERIFICATION_CODE_ENDPOINT
-        || ''
-      ).trim();
+      const runtimeConfig = await getHostedCheckoutRuntimeConfig();
+      const verificationUrl = runtimeConfig.verificationUrl;
       await addLog(`步骤 6：当前 hosted checkout 验证码接口配置为 ${verificationUrl || '(空)'}。`, 'info');
       const fetcher = typeof fetchImpl === 'function'
         ? fetchImpl
@@ -544,13 +567,13 @@
         }
 
         if (pageState.hostedStage === 'guest_checkout') {
-          const latestState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
-          const configuredPhone = String(latestState?.hostedCheckoutPhoneNumber || '').trim();
+          const runtimeConfig = await getHostedCheckoutRuntimeConfig();
+          const configuredPhone = String(runtimeConfig?.phone || '').trim();
           await addLog(`步骤 6：当前 hosted checkout 电话配置为 ${configuredPhone || '(空，将回退默认值)'}。`, 'info');
           await addLog('步骤 6：检测到 PayPal hosted checkout 卡支付页，正在填写卡资料并提交...', 'info');
           await runHostedCheckoutPayPalStep(tabId, {
             ...guestProfile,
-            phone: String(latestState?.hostedCheckoutPhoneNumber || guestProfile.phone || '').trim(),
+            phone: String(runtimeConfig?.phone || guestProfile.phone || '').trim(),
           });
           await sleepWithStop(1500);
           continue;
@@ -573,9 +596,11 @@
     }
 
     async function runHostedCheckoutAutomation(tabId) {
-      const runtimeState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+      const runtimeConfig = await getHostedCheckoutRuntimeConfig();
       const address = await fetchHostedCheckoutAddress();
-      const guestProfile = buildHostedCheckoutGuestProfile(address, runtimeState);
+      await addLog(`步骤 6：hosted checkout 初始电话配置为 ${runtimeConfig.phone || '(空)'}。`, 'info');
+      await addLog(`步骤 6：hosted checkout 地址数据：${JSON.stringify(address)}`, 'info');
+      const guestProfile = buildHostedCheckoutGuestProfile(address, runtimeConfig);
       await runHostedCheckoutOpenAiFlow(tabId, guestProfile);
 
       const transitionTab = await waitForUrlMatch(

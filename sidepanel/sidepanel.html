@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GuJumpgate 0.1.2</title>
+  <title>GuJumpgate 0.1.3</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -25,7 +25,7 @@
       <div class="header-version-block">
         <div class="header-version-main">
           <button id="extension-update-status" class="header-version-title header-version-link" type="button"
-          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate 0.1.2</button>
+          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate 0.1.3</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -338,6 +338,21 @@
         <input type="text" id="input-plus-checkout-conversion-proxy" class="data-input mono"
           placeholder="http://127.0.0.1:7890 或 socks5h://user:pass@host:port"
           title="仅在第 6 步创建 checkout 并跳转 pay.openai.com / Stripe hosted checkout 时临时生效；留空则沿用当前网络环境" />
+      </div>
+      <div class="data-row" id="row-plus-checkout-conversion-proxy-test" style="display:none;">
+        <span class="data-label" aria-hidden="true"></span>
+        <div class="data-inline data-value-actions plus-checkout-conversion-proxy-test-inline">
+          <button id="btn-plus-checkout-conversion-proxy-test" class="btn btn-outline btn-sm data-inline-btn" type="button">测试代理</button>
+          <label class="toggle-switch" for="input-plus-checkout-cloud-conversion-enabled"
+            title="启用后由云端服务接收 accessToken 并生成支付链接；本地支付转换代理将自动停用">
+            <input type="checkbox" id="input-plus-checkout-cloud-conversion-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+          <span class="setting-caption">云端支付转换</span>
+          <span id="display-plus-checkout-conversion-proxy-test-result" class="data-value mono plus-checkout-conversion-proxy-test-result">未测试</span>
+        </div>
       </div>
       <div class="data-row" id="row-hosted-checkout-verification-url" style="display:none;">
         <span class="data-label">验证码接口</span>

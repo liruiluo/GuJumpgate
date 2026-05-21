@@ -46,6 +46,41 @@
 >
 > PayPal 注册代理越干净，越不容易触发 PayPal 注册滑块。账单页面的 Captcha 扩展已经实现了自动屏蔽。
 
+## 二开版常用补货入口
+
+### PayPal 接码
+
+本仓库已有 PayPal Hosted 接码池能力：购买后把发货内容按 `手机号----验证码接口` 导入侧边栏的 Hosted 接码池即可。
+
+可用入口：
+
+- [PayPal 接码（60天有效）](https://pay.ldxp.cn/item/l2zcyd)
+- [备用低价实卡手机号](https://pay.ldxp.cn/item/420qt4)
+- [备用 PayPal 接码](https://pay.ldxp.cn/item/qkye7j)
+
+### Outlook / Hotmail 邮箱
+
+邮箱池建议使用带 Graph / OAuth2-IMAP / POP3 令牌的微软邮箱，方便配合 Hotmail Helper 查询邮件验证码。
+
+- [微软长效 Hotmail 双令牌号（Graph + OAuth2-IMAP-POP3）](https://pay.ldxp.cn/item/lnhlf1)
+- [微软长效 Outlook 双令牌号（Graph + OAuth2-IMAP-POP3）](https://pay.ldxp.cn/item/52h2bl)
+- [微软长效 Outlook gr/o2 双令牌号（Graph + OAuth2-IMAP-POP3）](https://pay.ldxp.cn/item/htjn2z)
+- [微软长效 Hotmail gr/o2 双令牌号（Graph + OAuth2-IMAP-POP3）](https://pay.ldxp.cn/item/hbv2q1)
+- [Outlook 长效 O2 令牌号（已开通 POP/IMAP）](https://pay.ldxp.cn/item/15v3sa)
+
+### Free 号兜底
+
+如果自己的 IP、邮箱或手机号环境触发风控，Free 号跑不出来，可以直接买现成 Free 号作为开 Plus 流程的账号起点。已接码 Free 号更适合用来跳过前面的注册卡点；后续支付阶段按流程准备 PayPal 接码即可。
+
+- [优质 GPT Free 号](https://pay.ldxp.cn/item/90uxs4)
+- [稳定 GPT Free 号（雅虎）](https://pay.ldxp.cn/item/hjq05g)
+- [ChatGPT Free 号（低价）](https://pay.ldxp.cn/item/t3cpo4)
+- [ChatGPT Free 号 50 个](https://pay.ldxp.cn/item/msq0lv)
+- [ChatGPT Free 号 100 个](https://pay.ldxp.cn/item/g1h8ad)
+- [ChatGPT Free 号 100 Token（实时验活，CPA + sub2api格式）](https://pay.ldxp.cn/item/6qnak5)
+- [GPT/Codex Free Token 1000个批量包](https://pay.ldxp.cn/item/louipa)
+- [ChatGPT Free 号（已接码）](https://pay.ldxp.cn/item/k3d17z)
+
 ## 测试环境
 
 - 成功率：连续 10 次串行运行，注册并激活 Plus 100% 成功率

@@ -1699,13 +1699,22 @@
       const amountLabel = amountSummary.rawAmount || (
         Number.isFinite(Number(amountSummary.amount)) ? String(amountSummary.amount) : '未知金额'
       );
-      const stopReason = `步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格，已自动停止整个流程。`;
-      await addLog(stopReason, 'warn');
+      const stopReason = `步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格。`;
+      const shouldRetryNonFreeTrial = Boolean(state?.autoRunRetryNonFreeTrial);
+      await addLog(
+        shouldRetryNonFreeTrial
+          ? `${stopReason} 无试用套餐自动重试已开启，将换新邮箱重走流程。`
+          : `${stopReason}已自动停止整个流程。`,
+        'warn'
+      );
       if (typeof markCurrentRegistrationAccountUsed === 'function') {
         await markCurrentRegistrationAccountUsed(state, {
           reason: 'plus-checkout-non-free-trial',
           logPrefix: 'Plus Checkout：当前账号没有免费试用资格',
         });
+      }
+      if (shouldRetryNonFreeTrial) {
+        throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
       }
       if (typeof requestStop === 'function') {
         await requestStop({ logMessage: false });

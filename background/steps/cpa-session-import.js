@@ -3,6 +3,13 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundCpaSessionImportModule() {
   const PLUS_CHECKOUT_SOURCE = 'plus-checkout';
   const PLUS_CHECKOUT_INJECT_FILES = ['content/utils.js', 'content/operation-delay.js', 'content/plus-checkout.js'];
+  const SESSION_IMPORT_MAX_ATTEMPTS = 3;
+  const SESSION_IMPORT_RETRY_DELAYS_MS = [3000, 7000];
+  const SESSION_TAB_COMPLETE_TIMEOUT_MS = 60000;
+  const SESSION_CONTENT_READY_TIMEOUT_MS = 45000;
+  const SESSION_READ_MESSAGE_TIMEOUT_MS = 30000;
+  const SESSION_READ_RESPONSE_TIMEOUT_MS = 15000;
+  const SESSION_IMPORT_TIMEOUT_MS = 120000;
 
   function createCpaSessionImportExecutor(deps = {}) {
     const {
@@ -50,6 +57,44 @@
     function resolveVisibleStep(state = {}) {
       const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
       return visibleStep > 0 ? visibleStep : 10;
+    }
+
+    function getErrorMessage(error) {
+      return normalizeString(error?.message || error);
+    }
+
+    function isRetryableSessionImportError(error) {
+      const message = getErrorMessage(error);
+      if (!message) {
+        return true;
+      }
+      if (/内容脚本文件加载失败|尚未配置|未配置|CPA 地址格式无效|管理密钥|未读取到可导入的 ChatGPT accessToken/i.test(message)) {
+        return false;
+      }
+      return /超时|timeout|timed out|Failed to fetch|NetworkError|Load failed|fetch failed|HTTP 5\d\d|请求失败（HTTP 5\d\d）|Receiving end does not exist|Could not establish connection|message port closed|内容脚本|未就绪|未读取到有效|目标标签页已关闭|页面加载完成/i.test(message);
+    }
+
+    async function runSessionImportWithRetries(action, visibleStep) {
+      let lastError = null;
+      for (let attempt = 1; attempt <= SESSION_IMPORT_MAX_ATTEMPTS; attempt += 1) {
+        throwIfStopped();
+        try {
+          return await action(attempt);
+        } catch (error) {
+          lastError = error;
+          if (attempt >= SESSION_IMPORT_MAX_ATTEMPTS || !isRetryableSessionImportError(error)) {
+            throw error;
+          }
+          const delayMs = SESSION_IMPORT_RETRY_DELAYS_MS[attempt - 1] || SESSION_IMPORT_RETRY_DELAYS_MS[SESSION_IMPORT_RETRY_DELAYS_MS.length - 1];
+          await addStepLog(
+            visibleStep,
+            `SESSION JSON 导入第 ${attempt} 次尝试失败：${getErrorMessage(error) || '未知错误'}。${Math.round(delayMs / 1000)} 秒后自动重试...`,
+            'warn'
+          );
+          await sleepWithStop(delayMs);
+        }
+      }
+      throw lastError || new Error('SESSION JSON 导入重试失败。');
     }
 
     function isSupportedChatGptSessionUrl(url = '') {
@@ -196,11 +241,16 @@
     }
 
     async function readCurrentChatGptSession(tabId, visibleStep) {
-      await waitForTabCompleteUntilStopped(tabId);
+      await waitForTabCompleteUntilStopped(tabId, {
+        timeoutMs: SESSION_TAB_COMPLETE_TIMEOUT_MS,
+        retryDelayMs: 300,
+      });
       await sleepWithStop(1000);
       await ensureContentScriptReadyOnTabUntilStopped(PLUS_CHECKOUT_SOURCE, tabId, {
         inject: PLUS_CHECKOUT_INJECT_FILES,
         injectSource: PLUS_CHECKOUT_SOURCE,
+        timeoutMs: SESSION_CONTENT_READY_TIMEOUT_MS,
+        retryDelayMs: 700,
         logMessage: `步骤 ${visibleStep}：正在等待 ChatGPT 会话页完成加载，再继续读取当前登录会话...`,
       });
 
@@ -211,6 +261,10 @@
           includeSession: true,
           includeAccessToken: true,
         },
+      }, {
+        timeoutMs: SESSION_READ_MESSAGE_TIMEOUT_MS,
+        responseTimeoutMs: SESSION_READ_RESPONSE_TIMEOUT_MS,
+        retryDelayMs: 300,
       });
       if (sessionResult?.error) {
         throw new Error(sessionResult.error);
@@ -238,28 +292,31 @@
       const visibleStep = resolveVisibleStep(state);
       const api = getCpaApi();
 
-      await addStepLog(visibleStep, '正在定位当前 ChatGPT 会话页并准备导入 CPA...', 'info');
-      const tabId = await resolveSessionTabId(state);
-      const tab = await getResolvedSessionTab(tabId, visibleStep);
-      if (chrome?.tabs?.update) {
-        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-      }
+      const result = await runSessionImportWithRetries(async (attempt) => {
+        const attemptSuffix = attempt > 1 ? `（第 ${attempt}/${SESSION_IMPORT_MAX_ATTEMPTS} 次尝试）` : '';
+        await addStepLog(visibleStep, `正在定位当前 ChatGPT 会话页并准备导入 CPA${attemptSuffix}...`, 'info');
+        const tabId = await resolveSessionTabId(state);
+        const tab = await getResolvedSessionTab(tabId, visibleStep);
+        if (chrome?.tabs?.update) {
+          await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+        }
 
-      await addStepLog(visibleStep, '正在读取当前 ChatGPT 登录会话...', 'info');
-      const sessionState = await readCurrentChatGptSession(tab.id, visibleStep);
-      throwIfStopped();
+        await addStepLog(visibleStep, `正在读取当前 ChatGPT 登录会话${attemptSuffix}...`, 'info');
+        const sessionState = await readCurrentChatGptSession(tab.id, visibleStep);
+        throwIfStopped();
 
-      const result = await api.importCurrentChatGptSession({
-        ...state,
-        session: sessionState.session,
-        accessToken: sessionState.accessToken,
-      }, {
-        visibleStep,
-        logLabel: `步骤 ${visibleStep}`,
-        logOptions: { step: visibleStep, stepKey: 'cpa-session-import' },
-        timeoutMs: 120000,
-        importTimeoutMs: 120000,
-      });
+        return api.importCurrentChatGptSession({
+          ...state,
+          session: sessionState.session,
+          accessToken: sessionState.accessToken,
+        }, {
+          visibleStep,
+          logLabel: `步骤 ${visibleStep}`,
+          logOptions: { step: visibleStep, stepKey: 'cpa-session-import' },
+          timeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+          importTimeoutMs: SESSION_IMPORT_TIMEOUT_MS,
+        });
+      }, visibleStep);
 
       await completeNodeFromBackground(state?.nodeId || 'cpa-session-import', result);
     }

@@ -425,6 +425,8 @@ const inputCfDomain = document.getElementById('input-cf-domain');
 const btnCfDomainMode = document.getElementById('btn-cf-domain-mode');
 const inputRunCount = document.getElementById('input-run-count');
 const inputAutoSkipFailures = document.getElementById('input-auto-skip-failures');
+const inputAutoRunRetryNonFreeTrial = document.getElementById('input-auto-run-retry-non-free-trial');
+const inputAutoRunRetryPaypalCallback = document.getElementById('input-auto-run-retry-paypal-callback');
 const inputAutoSkipFailuresThreadIntervalMinutes = document.getElementById('input-auto-skip-failures-thread-interval-minutes');
 const inputStep6CookieCleanupEnabled = document.getElementById('input-step6-cookie-cleanup-enabled');
 const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled');
@@ -1080,7 +1082,7 @@ function rebuildStepDefinitionState(plusModeEnabled = false, options = {}) {
   }
 }
 const CONTRIBUTION_CONTENT_PROMPT_DISMISSED_VERSION_STORAGE_KEY = 'multipage-contribution-content-prompt-dismissed-version';
-const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 3;
+const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 6;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const ICLOUD_PROVIDER = 'icloud';
@@ -1708,6 +1710,8 @@ const LOG_LEVEL_LABELS = {
 
 const CLOUDFLARE_TEMP_EMAIL_REPOSITORY_URL = 'https://github.com/QLHazyCoder/cloudflare_temp_email';
 
+let lastLocalHelperStartupAlertAt = 0;
+
 function usesGeneratedAliasMailProvider(
   provider,
   mail2925Mode = getSelectedMail2925Mode(),
@@ -1755,6 +1759,28 @@ function showToast(message, type = 'error', duration = 4000) {
   if (duration > 0) {
     setTimeout(() => dismissToast(toast), duration);
   }
+}
+
+function isLocalHelperStartupErrorMessage(message = '') {
+  return /请检查本地\s*hotmail-helper\s*是否启动|start-hotmail-helper\.bat/i.test(String(message || ''));
+}
+
+function showLocalHelperStartupAlert(message = '') {
+  const now = Date.now();
+  if (now - lastLocalHelperStartupAlertAt < 10000) {
+    return;
+  }
+  lastLocalHelperStartupAlertAt = now;
+  openConfirmModal({
+    title: '本地 helper 未连接',
+    message: String(message || '本地 CPA JSON 导出无法连接本地 helper。'),
+    alert: {
+      text: '请检查本地 hotmail-helper 是否启动。',
+      tone: 'danger',
+    },
+    confirmLabel: '我知道了',
+    confirmVariant: 'btn-danger',
+  }).catch(() => { });
 }
 
 function dismissToast(toast) {
@@ -1977,6 +2003,19 @@ async function openConfirmModalWithOption({
 
 async function openPlusManualConfirmationDialog(options = {}) {
   const method = String(options.method || '').trim().toLowerCase();
+  if (method === 'paypal-hosted-generic-error') {
+    return openActionModal({
+      title: String(options.title || '').trim() || 'PayPal Checkout 异常',
+      message: String(options.message || '').trim()
+        || 'PayPal Checkout 暂时不可用。请检查 PLUS 是否正常开通，或重新创建 Plus Checkout。',
+      actions: [
+        { id: 'cancel', label: '取消', variant: 'btn-ghost' },
+        { id: 'check', label: '检查', variant: 'btn-outline' },
+        { id: 'retry', label: '重试', variant: 'btn-primary' },
+      ],
+      alert: { text: '检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。', tone: 'info' },
+    });
+  }
   const title = String(options.title || '').trim() || (method === 'gopay' ? 'GoPay 订阅确认' : '手动确认');
   const message = String(options.message || '').trim()
     || (method === 'gopay'
@@ -2027,7 +2066,7 @@ async function syncPlusManualConfirmationDialog() {
       return;
     }
 
-    const confirmed = choice === 'confirm';
+    const confirmed = choice === 'confirm' || choice === 'retry' || choice === 'check';
     const response = await chrome.runtime.sendMessage({
       type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
       source: 'sidepanel',
@@ -2035,6 +2074,7 @@ async function syncPlusManualConfirmationDialog() {
         step,
         requestId,
         confirmed,
+        action: choice,
       },
     });
     if (response?.error) {
@@ -2301,7 +2341,7 @@ async function openAutoSkipFailuresConfirmModal() {
 async function openAutoRunFallbackRiskConfirmModal(totalRuns) {
   const result = await openConfirmModalWithOption({
     title: '自动运行风险提醒',
-    message: `当前轮数已经不适合单节点情况，请确保已经配置并打开节点轮询功能（若没有配置，请点击贡献/使用按钮，根据网页中使用教程进行配置），避免连续使用一个节点注册，导致出现手机号验证。`,
+    message: `当前轮数可能不适合单节点情况，可选择对应代理工具节点轮询功能（若没有配置，请使用说明按钮，根据README中使用教程进行配置），避免连续使用一个节点注册，导致出现手机号验证。`,
     confirmLabel: '继续',
   });
 
@@ -4381,6 +4421,8 @@ function collectSettingsPayload() {
     cloudMailReceiveMailbox: normalizeCloudMailReceiveMailboxInput((typeof inputCloudMailReceiveMailbox !== 'undefined' && inputCloudMailReceiveMailbox) ? inputCloudMailReceiveMailbox.value : ''),
     cloudMailDomain: normalizeCloudMailDomainInput((typeof inputCloudMailDomain !== 'undefined' && inputCloudMailDomain) ? inputCloudMailDomain.value : ''),
     autoRunSkipFailures: inputAutoSkipFailures.checked,
+    autoRunRetryNonFreeTrial: Boolean(inputAutoRunRetryNonFreeTrial?.checked),
+    autoRunRetryPaypalCallback: Boolean(inputAutoRunRetryPaypalCallback?.checked),
     autoRunFallbackThreadIntervalMinutes: normalizeAutoRunThreadIntervalMinutes(inputAutoSkipFailuresThreadIntervalMinutes.value),
     step6CookieCleanupEnabled: typeof inputStep6CookieCleanupEnabled !== 'undefined' && inputStep6CookieCleanupEnabled
       ? Boolean(inputStep6CookieCleanupEnabled.checked)
@@ -9210,6 +9252,19 @@ async function ensureGpcApiKeyReadyForStart(options = {}) {
 async function openPlusManualConfirmationDialog(options = {}) {
   const method = String(options.method || '').trim().toLowerCase();
   const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
+  if (method === 'paypal-hosted-generic-error') {
+    return openActionModal({
+      title: String(options.title || '').trim() || 'PayPal Checkout 异常',
+      message: String(options.message || '').trim()
+        || 'PayPal Checkout 暂时不可用。请检查 PLUS 是否正常开通，或重新创建 Plus Checkout。',
+      actions: [
+        { id: 'cancel', label: '取消', variant: 'btn-ghost' },
+        { id: 'check', label: '检查', variant: 'btn-outline' },
+        { id: 'retry', label: '重试', variant: 'btn-primary' },
+      ],
+      alert: { text: '检查会打开 ChatGPT；重试会从创建 Plus Checkout 重新开始。', tone: 'info' },
+    });
+  }
   if (method === 'gopay-otp') {
     if (!sharedFormDialog?.open) {
       return null;
@@ -9291,7 +9346,11 @@ async function syncPlusManualConfirmationDialog() {
       return;
     }
 
-    const confirmed = choice === 'confirm' || choice?.action === 'confirm';
+    const choiceAction = String(choice?.action || choice || '').trim();
+    const confirmed = choice === 'confirm'
+      || choice?.action === 'confirm'
+      || choiceAction === 'check'
+      || choiceAction === 'retry';
     const response = await chrome.runtime.sendMessage({
       type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
       source: 'sidepanel',
@@ -9299,6 +9358,7 @@ async function syncPlusManualConfirmationDialog() {
         step,
         requestId,
         confirmed,
+        action: choiceAction,
         ...(choice?.otp ? { otp: choice.otp } : {}),
       },
     });
@@ -9309,7 +9369,9 @@ async function syncPlusManualConfirmationDialog() {
       showToast(
         method === 'gopay-otp'
           ? 'GPC OTP 已提交，正在继续验证...'
-          : (method === gopayValue ? 'GoPay 订阅已确认，正在继续 OAuth 登录...' : '已确认，流程继续执行中...'),
+          : (method === 'paypal-hosted-generic-error'
+            ? (choiceAction === 'check' ? '已打开 ChatGPT，请检查 PLUS 状态。' : '正在重新创建 Plus Checkout...')
+            : (method === gopayValue ? 'GoPay 订阅已确认，正在继续 OAuth 登录...' : '已确认，流程继续执行中...')),
         'info',
         2200
       );
@@ -9521,6 +9583,12 @@ function applyAutoRunStatus(payload = currentAutoRun) {
     inputSub2ApiAccountPriority.disabled = locked;
   }
   inputAutoSkipFailures.disabled = scheduled;
+  if (inputAutoRunRetryNonFreeTrial) {
+    inputAutoRunRetryNonFreeTrial.disabled = scheduled;
+  }
+  if (inputAutoRunRetryPaypalCallback) {
+    inputAutoRunRetryPaypalCallback.disabled = scheduled;
+  }
 
   const lockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
     ? getLockedRunCountFromEmailPool()
@@ -10101,6 +10169,12 @@ function applySettingsState(state) {
   renderCloudflareDomainOptions(state?.cloudflareDomain || '');
   setCloudflareDomainEditMode(false, { clearInput: true });
   inputAutoSkipFailures.checked = Boolean(state?.autoRunSkipFailures);
+  if (inputAutoRunRetryNonFreeTrial) {
+    inputAutoRunRetryNonFreeTrial.checked = Boolean(state?.autoRunRetryNonFreeTrial);
+  }
+  if (inputAutoRunRetryPaypalCallback) {
+    inputAutoRunRetryPaypalCallback.checked = Boolean(state?.autoRunRetryPaypalCallback);
+  }
   inputAutoSkipFailuresThreadIntervalMinutes.value = String(normalizeAutoRunThreadIntervalMinutes(state?.autoRunFallbackThreadIntervalMinutes));
   if (typeof inputStep6CookieCleanupEnabled !== 'undefined' && inputStep6CookieCleanupEnabled) {
     inputStep6CookieCleanupEnabled.checked = Boolean(state?.step6CookieCleanupEnabled);
@@ -10660,7 +10734,7 @@ async function initializeReleaseInfo() {
 
   const localVersion = sidepanelUpdateService?.getLocalVersionLabel?.(chrome.runtime.getManifest())
     || chrome.runtime.getManifest()?.version_name
-    || (chrome.runtime.getManifest()?.version ? `GuJumpgate ${chrome.runtime.getManifest().version}` : '');
+    || (chrome.runtime.getManifest()?.version ? `GuJumpgate  V${chrome.runtime.getManifest().version}` : '');
   extensionUpdateStatus.textContent = localVersion || 'GuJumpgate 0.0';
   extensionUpdateStatus.classList.remove('is-update-available', 'is-check-failed');
   extensionUpdateStatus.classList.add('is-version-label');
@@ -11558,7 +11632,7 @@ function updateMailProviderUI() {
   btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail || useCustomEmailPool;
   inputEmail.readOnly = useHotmail || useLuckmail;
   inputEmail.placeholder = useHotmail
-    ? '由 Hotmail 账号池自动分配'
+    ? '由 微软邮箱账户池 自动分配'
     : (useLuckmail
       ? '步骤 3 自动购买 LuckMail 邮箱并回填'
       : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder));
@@ -12999,12 +13073,12 @@ function validateHostedCheckoutContactConfig(options = {}) {
       return '';
     }
     if (missingPhone && missingVerificationUrl) {
-      return '当前 Hosted 接码池为空，请先填写 PayPal 电话(不带+1) 和 验证码接口，或导入 Hosted 接码池。';
+      return '当前 PayPal 接码池为空，请先填写 PayPal 电话(不带+1) 和 验证码接口，或导入 PayPal 接码池。';
     }
     if (missingPhone) {
-      return '当前 Hosted 接码池为空，请先填写 PayPal 电话(不带+1)，或导入 Hosted 接码池。';
+      return '当前 PayPal 接码池为空，请先填写 PayPal 电话(不带+1)，或导入 PayPal 接码池。';
     }
-    return '当前 Hosted 接码池为空，请先填写验证码接口，或导入 Hosted 接码池。';
+    return '当前 PayPal 接码池为空，请先填写验证码接口，或导入 PayPal 接码池。';
   })();
 
   if (inputHostedCheckoutPhone) {
@@ -13707,6 +13781,8 @@ async function startAutoRunFromCurrentSettings() {
   }
   let mode = 'restart';
   const autoRunSkipFailures = inputAutoSkipFailures.checked;
+  const autoRunRetryNonFreeTrial = Boolean(inputAutoRunRetryNonFreeTrial?.checked);
+  const autoRunRetryPaypalCallback = Boolean(inputAutoRunRetryPaypalCallback?.checked);
   const contributionNickname = String(inputContributionNickname?.value || '').trim();
   const contributionQq = String(inputContributionQq?.value || '').trim();
   const fallbackThreadIntervalMinutes = normalizeAutoRunThreadIntervalMinutes(
@@ -13752,6 +13828,8 @@ async function startAutoRunFromCurrentSettings() {
       totalRuns,
       delayMinutes,
       autoRunSkipFailures,
+      autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback,
       contributionMode: Boolean(latestState?.contributionMode),
       contributionNickname,
       contributionQq,
@@ -15077,6 +15155,16 @@ inputAutoSkipFailures.addEventListener('change', async () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputAutoRunRetryNonFreeTrial?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputAutoRunRetryPaypalCallback?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputTempEmailBaseUrl.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -16248,6 +16336,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       appendLog(message.payload);
       if (message.payload.level === 'error') {
         showToast(message.payload.message, 'error');
+        if (isLocalHelperStartupErrorMessage(message.payload.message)) {
+          showLocalHelperStartupAlert(message.payload.message);
+        }
         scheduleAccountRunHistoryRefresh();
       }
       break;
@@ -16717,6 +16808,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.autoRunSkipFailures !== undefined) {
         inputAutoSkipFailures.checked = Boolean(message.payload.autoRunSkipFailures);
         updateFallbackThreadIntervalInputState();
+      }
+      if (message.payload.autoRunRetryNonFreeTrial !== undefined && inputAutoRunRetryNonFreeTrial) {
+        inputAutoRunRetryNonFreeTrial.checked = Boolean(message.payload.autoRunRetryNonFreeTrial);
+      }
+      if (message.payload.autoRunRetryPaypalCallback !== undefined && inputAutoRunRetryPaypalCallback) {
+        inputAutoRunRetryPaypalCallback.checked = Boolean(message.payload.autoRunRetryPaypalCallback);
       }
       if (message.payload.autoRunDelayEnabled !== undefined) {
         inputAutoDelayEnabled.checked = Boolean(message.payload.autoRunDelayEnabled);

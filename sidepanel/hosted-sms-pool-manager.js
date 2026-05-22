@@ -211,8 +211,8 @@
 
       const entriesWithState = getEntriesWithState(renderedEntries);
       if (!entriesWithState.length) {
-        dom.hostedSmsPoolList.innerHTML = '<div class="luckmail-empty">还没有 Hosted 号码，先导入一批号码再开始。</div>';
-        dom.hostedSmsPoolSummary.textContent = '导入 PayPal Hosted 接码号码，每行一个号码和验证码接口。';
+        dom.hostedSmsPoolList.innerHTML = '<div class="luckmail-empty">还没有 PayPal 号码，先导入一批号码再开始。</div>';
+        dom.hostedSmsPoolSummary.textContent = '导入 PayPal 接码号码，每行一个号码和验证码接口。';
         updateControls([]);
         return;
       }
@@ -237,6 +237,7 @@
             <div class="luckmail-item-email-row">
               <div class="luckmail-item-email hosted-sms-pool-phone">
                 <span>${helpers.escapeHtml?.(entry.phone) || entry.phone}</span>
+                ${entry.current ? '<span class="hosted-sms-pool-current-label">当前</span>' : ''}
                 ${localPhone && localPhone !== entry.phone ? `<span class="hosted-sms-pool-phone-local">PayPal 填 ${helpers.escapeHtml?.(localPhone) || localPhone}</span>` : ''}
               </div>
               <button
@@ -294,7 +295,7 @@
 
         item.querySelector('[data-action="delete"]')?.addEventListener('click', async () => {
           const confirmed = await helpers.openConfirmModal?.({
-            title: '删除 Hosted 号码',
+            title: '删除 PayPal 号码',
             message: `确认删除 ${entry.phone} 吗？此操作不可撤销。`,
             confirmLabel: '确认删除',
             confirmVariant: 'btn-danger',
@@ -328,7 +329,7 @@
       const nextUsage = normalizeUsage(result.usage || previousUsage);
       const nextText = entriesToText(nextEntries);
 
-      setLoading(true, '正在更新 Hosted 号池...');
+      setLoading(true, '正在更新 PayPal 号池...');
       state.setText?.(nextText);
       state.setUsage?.(nextUsage);
       render(nextEntries);
@@ -339,7 +340,7 @@
         state.setText?.(previousText);
         state.setUsage?.(previousUsage);
         render(previousEntries);
-        helpers.showToast?.(`更新 Hosted 号池失败：${error.message}`, 'error');
+        helpers.showToast?.(`更新 PayPal 号池失败：${error.message}`, 'error');
         return false;
       } finally {
         setLoading(false);
@@ -349,7 +350,7 @@
     async function importEntries() {
       const text = normalizePoolText(dom.inputHostedSmsPoolImport?.value || '');
       if (!text) {
-        helpers.showToast?.('请先粘贴 Hosted 号码，每行一个号码和验证码接口。', 'warn');
+        helpers.showToast?.('请先粘贴 PayPal 号码，每行一个号码和验证码接口。', 'warn');
         return;
       }
 
@@ -392,7 +393,7 @@
     async function clearUsedState() {
       const confirmed = await helpers.openConfirmModal?.({
         title: '清空使用次数',
-        message: '确认清空 Hosted 号池的使用次数吗？号码本身会保留。',
+        message: '确认清空 PayPal 号池的使用次数吗？号码本身会保留。',
         confirmLabel: '清空次数',
       });
       if (!confirmed) return;
@@ -401,8 +402,8 @@
 
     async function deleteAll() {
       const confirmed = await helpers.openConfirmModal?.({
-        title: '删除 Hosted 号池',
-        message: '确认删除当前全部 Hosted 号码吗？此操作不可撤销。',
+        title: '删除 PayPal 号池',
+        message: '确认删除当前全部 PayPal 号码吗？此操作不可撤销。',
         confirmLabel: '确认删除',
         confirmVariant: 'btn-danger',
       });
@@ -415,7 +416,7 @@
       if (state.isVisible && !state.isVisible()) {
         return;
       }
-      if (!silent) setLoading(true, '正在刷新 Hosted 号池...');
+      if (!silent) setLoading(true, '正在刷新 PayPal 号池...');
       render(parseEntries(state.getText?.()));
       if (!silent) setLoading(false);
     }
@@ -463,7 +464,7 @@
       if (dom.selectHostedSmsPoolFilter) dom.selectHostedSmsPoolFilter.value = 'all';
       if (dom.hostedSmsPoolList) dom.hostedSmsPoolList.innerHTML = '';
       if (dom.hostedSmsPoolSummary) {
-        dom.hostedSmsPoolSummary.textContent = '导入 PayPal Hosted 接码号码，每行一个号码和验证码接口。';
+        dom.hostedSmsPoolSummary.textContent = '导入 PayPal 接码号码，每行一个号码和验证码接口。';
       }
       updateControls([]);
     }

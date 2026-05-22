@@ -32,7 +32,7 @@
   }
 
   function stripVersionPrefix(version) {
-    return String(version || '').trim().replace(/^(?:gujumpgate|flowpilot|ultra|pro|v)\s*/i, '');
+    return String(version || '').trim().replace(/^(?:(?:gujumpgate|flowpilot|ultra|pro)\s*v?|v)\s*/i, '');
   }
 
   function extractVersionCore(version) {
@@ -68,7 +68,7 @@
 
   function getVersionFamilyPrefix(family) {
     if (family === VERSION_FAMILY_GUJUMPGATE) {
-      return 'GuJumpgate';
+      return 'GuJumpgate  V';
     }
     if (family === VERSION_FAMILY_ULTRA) {
       return 'Ultra';

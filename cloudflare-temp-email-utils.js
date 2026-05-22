@@ -258,6 +258,68 @@
       .trim();
   }
 
+  function normalizeCloudflareTempEmailContent(value, options = {}, depth = 0) {
+    if (value === undefined || value === null || depth > 6) return '';
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => normalizeCloudflareTempEmailContent(item, options, depth + 1))
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    if (typeof value === 'object') {
+      const parts = [];
+      const keys = [
+        'text',
+        'text_content',
+        'textContent',
+        'plain',
+        'plain_text',
+        'plainText',
+        'body_text',
+        'bodyText',
+        'preview',
+        'bodyPreview',
+        'snippet',
+        'summary',
+        'content',
+        'body',
+        'message',
+        'html',
+        'html_content',
+        'htmlContent',
+        'body_html',
+        'bodyHtml',
+      ];
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        const isHtml = /html/i.test(key);
+        const part = normalizeCloudflareTempEmailContent(value[key], { html: isHtml }, depth + 1);
+        if (part) parts.push(part);
+      }
+      return parts.join(' ').replace(/\s+/g, ' ').trim();
+    }
+
+    const text = String(value || '');
+    const shouldStripHtml = options.html || /<[a-z][\s\S]*>/i.test(text);
+    return (shouldStripHtml ? stripHtmlTags(text) : text).replace(/\s+/g, ' ').trim();
+  }
+
+  function joinCloudflareTempEmailContentParts(parts = []) {
+    const result = [];
+    const seen = new Set();
+    for (const part of parts) {
+      const normalized = normalizeCloudflareTempEmailContent(part);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(normalized);
+    }
+    return result.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
   function decodeMimeBody(bodyText = '', headers = {}) {
     const contentType = String(headers['content-type'] || '');
     const transferEncoding = String(headers['content-transfer-encoding'] || '').trim().toLowerCase();
@@ -310,10 +372,18 @@
   function normalizeReceivedDateTime(value) {
     if (!value && value !== 0) return '';
     if (typeof value === 'number' && Number.isFinite(value)) {
-      return new Date(value).toISOString();
+      const timestamp = value > 0 && value < 100000000000 ? value * 1000 : value;
+      return new Date(timestamp).toISOString();
     }
     const source = String(value || '').trim();
     if (!source) return '';
+    if (/^\d+$/.test(source)) {
+      const numeric = Number(source);
+      if (Number.isFinite(numeric)) {
+        const timestamp = numeric > 0 && numeric < 100000000000 ? numeric * 1000 : numeric;
+        return new Date(timestamp).toISOString();
+      }
+    }
     const parsed = Date.parse(source);
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : source;
   }
@@ -345,13 +415,29 @@
       row.mail_from,
       parsedMime.headers.from,
     ]));
-    const bodyPreview = firstNonEmptyString([
+    const bodyPreview = joinCloudflareTempEmailContentParts([
       row.text,
+      row.text_content,
+      row.textContent,
+      row.plain,
+      row.plain_text,
+      row.plainText,
+      row.body_text,
+      row.bodyText,
       row.preview,
+      row.bodyPreview,
+      row.snippet,
+      row.summary,
+      row.content,
       row.body,
+      row.html,
+      row.html_content,
+      row.htmlContent,
+      row.body_html,
+      row.bodyHtml,
       parsedMime.text,
       raw,
-    ]).replace(/\s+/g, ' ').trim();
+    ]);
 
     return {
       id: firstNonEmptyString([row.id, row.mail_id]),

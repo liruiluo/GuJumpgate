@@ -304,6 +304,7 @@ const {
   normalizeCloudflareTempEmailBaseUrl,
   normalizeCloudflareTempEmailDomain,
   normalizeCloudflareTempEmailDomains,
+  normalizeCloudflareTempEmailMessage,
   normalizeCloudflareTempEmailMailApiMessages,
 } = self.CloudflareTempEmailUtils;
 const {
@@ -1046,6 +1047,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   gopayHelperAutoModeEnabled: false,
   gopayHelperApiKeyStatus: '',
   autoRunSkipFailures: false,
+  autoRunRetryNonFreeTrial: false,
+  autoRunRetryPaypalCallback: false,
   autoRunFallbackThreadIntervalMinutes: 0,
   oauthFlowTimeoutEnabled: true,
   autoRunDelayEnabled: false,
@@ -2174,6 +2177,8 @@ function normalizeAutoRunTimerPlan(plan) {
 
   const totalRuns = normalizeRunCount(plan.totalRuns);
   const autoRunSkipFailures = Boolean(plan.autoRunSkipFailures);
+  const autoRunRetryNonFreeTrial = Boolean(plan.autoRunRetryNonFreeTrial);
+  const autoRunRetryPaypalCallback = Boolean(plan.autoRunRetryPaypalCallback);
   const mode = plan.mode === 'continue' ? 'continue' : 'restart';
   const currentRun = Math.max(0, Math.min(totalRuns, Math.floor(Number(plan.currentRun) || 0)));
   const attemptRun = Math.max(
@@ -2191,6 +2196,8 @@ function normalizeAutoRunTimerPlan(plan) {
       fireAt,
       totalRuns,
       autoRunSkipFailures,
+      autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback,
       mode,
       currentRun: 0,
       attemptRun: 0,
@@ -2209,6 +2216,8 @@ function normalizeAutoRunTimerPlan(plan) {
       fireAt,
       totalRuns,
       autoRunSkipFailures,
+      autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback,
       mode: 'restart',
       currentRun: normalizedCurrentRun,
       attemptRun: normalizedAttemptRun,
@@ -2226,6 +2235,8 @@ function normalizeAutoRunTimerPlan(plan) {
     fireAt,
     totalRuns,
     autoRunSkipFailures,
+    autoRunRetryNonFreeTrial,
+    autoRunRetryPaypalCallback,
     mode: 'restart',
     currentRun: normalizedCurrentRun,
     attemptRun: normalizedAttemptRun,
@@ -2256,6 +2267,8 @@ function normalizeAutoRunTimerPlanFromState(state = {}) {
     fireAt: legacyScheduledAt,
     totalRuns: state.scheduledAutoRunPlan?.totalRuns ?? state.autoRunTotalRuns,
     autoRunSkipFailures: state.scheduledAutoRunPlan?.autoRunSkipFailures ?? state.autoRunSkipFailures,
+    autoRunRetryNonFreeTrial: state.scheduledAutoRunPlan?.autoRunRetryNonFreeTrial ?? state.autoRunRetryNonFreeTrial,
+    autoRunRetryPaypalCallback: state.scheduledAutoRunPlan?.autoRunRetryPaypalCallback ?? state.autoRunRetryPaypalCallback,
     autoRunSessionId: state.autoRunSessionId,
     mode: state.scheduledAutoRunPlan?.mode,
   });
@@ -3179,6 +3192,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'gopayHelperRemainingUses':
       return Math.max(0, Number(value) || 0);
     case 'autoRunSkipFailures':
+    case 'autoRunRetryNonFreeTrial':
+    case 'autoRunRetryPaypalCallback':
     case 'oauthFlowTimeoutEnabled':
     case 'gopayHelperLocalSmsHelperEnabled':
     case 'gopayHelperAutoModeEnabled':
@@ -6644,6 +6659,92 @@ function summarizeCloudflareTempEmailMessagesForLog(messages) {
     .join(' || ');
 }
 
+function mergeCloudflareTempEmailMessageDetail(message = {}, detail = {}) {
+  const basePreview = String(message?.bodyPreview || '').trim();
+  const detailPreview = String(detail?.bodyPreview || '').trim();
+  const bodyPreview = [basePreview, detailPreview]
+    .filter(Boolean)
+    .filter((value, index, list) => list.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    ...message,
+    ...detail,
+    id: detail.id || message.id || '',
+    address: detail.address || message.address || '',
+    originalRecipient: detail.originalRecipient || message.originalRecipient || '',
+    addressId: detail.addressId || message.addressId || '',
+    subject: detail.subject || message.subject || '',
+    from: detail?.from?.emailAddress?.address ? detail.from : (message.from || detail.from),
+    bodyPreview,
+    raw: detail.raw || message.raw || '',
+    receivedDateTime: detail.receivedDateTime || message.receivedDateTime || '',
+  };
+}
+
+function normalizeCloudflareTempEmailDetailPayload(payload, fallbackMessage = {}) {
+  const candidates = [];
+  if (Array.isArray(payload)) {
+    candidates.push(...payload);
+  } else if (payload && typeof payload === 'object') {
+    candidates.push(
+      payload.data,
+      payload.item,
+      payload.mail,
+      payload.message,
+      payload.result,
+      payload
+    );
+  }
+
+  for (const candidate of candidates) {
+    const normalized = normalizeCloudflareTempEmailMessage(candidate);
+    if (normalized) {
+      return mergeCloudflareTempEmailMessageDetail(fallbackMessage, normalized);
+    }
+  }
+
+  return fallbackMessage;
+}
+
+async function fetchCloudflareTempEmailMailDetail(config, message = {}) {
+  const mailId = String(message?.id || '').trim();
+  if (!mailId) return null;
+
+  const payload = await requestCloudflareTempEmailJson(config, `/admin/mails/${encodeURIComponent(mailId)}`, {
+    method: 'GET',
+  });
+  return normalizeCloudflareTempEmailDetailPayload(payload, message);
+}
+
+async function fetchCloudflareTempEmailMessageDetails(config, messages = {}, options = {}) {
+  const limit = Math.max(1, Math.min(10, Number(options.limit) || 5));
+  const candidates = (Array.isArray(messages) ? messages : [])
+    .filter((message) => String(message?.id || '').trim())
+    .slice()
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.receivedDateTime || '') || 0;
+      const rightTime = Date.parse(right.receivedDateTime || '') || 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, limit);
+
+  if (!candidates.length) return [];
+
+  const detailMessages = [];
+  for (const message of candidates) {
+    try {
+      const detail = await fetchCloudflareTempEmailMailDetail(config, message);
+      if (detail) detailMessages.push(detail);
+    } catch (_) {
+      // Some Cloudflare Temp Email deployments expose only the list endpoint.
+    }
+  }
+  return detailMessages;
+}
+
 async function deleteCloudflareTempEmailMail(config, mailId) {
   const normalizedMailId = String(mailId || '').trim();
   if (!normalizedMailId) return false;
@@ -6659,8 +6760,7 @@ async function listCloudflareTempEmailMessages(state, options = {}) {
   const address = normalizeCloudflareTempEmailAddress(options.address);
   const lookupMode = normalizeCloudflareTempEmailLookupMode(options.lookupMode || config.lookupMode);
   const originalRecipient = normalizeCloudflareTempEmailReceiveMailbox(options.originalRecipient);
-  const useRegistrationLookup = lookupMode === CLOUDFLARE_TEMP_EMAIL_LOOKUP_MODE_REGISTRATION_EMAIL
-    && Boolean(originalRecipient);
+  const useRegistrationLookup = Boolean(options.useRegistrationLookup) && Boolean(originalRecipient);
   const queryAddress = useRegistrationLookup ? '' : address;
   const payload = await requestCloudflareTempEmailJson(config, '/admin/mails', {
     method: 'GET',
@@ -6725,13 +6825,14 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
         address: useRegistrationLookup ? '' : targetEmail,
         lookupMode,
         originalRecipient,
+        useRegistrationLookup,
         limit: pollPayload.limit || CLOUDFLARE_TEMP_EMAIL_DEFAULT_PAGE_SIZE,
         offset: pollPayload.offset || 0,
       });
       if (useRegistrationLookup && missingOriginalRecipient) {
         throw new Error('Cloudflare Temp Email 当前接口未返回 original_recipient，注册邮箱查信需要部署本扩展作者修改后的 Cloudflare Temp Email，或切回“邮件接收”。');
       }
-      const matchResult = pickVerificationMessageWithTimeFallback(messages, {
+      let matchResult = pickVerificationMessageWithTimeFallback(messages, {
         afterTimestamp: pollPayload.filterAfterTimestamp || 0,
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
@@ -6739,7 +6840,28 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
         codePatterns: pollPayload.codePatterns || [],
         excludeCodes: pollPayload.excludeCodes || [],
       });
-      const match = matchResult.match;
+      let match = matchResult.match;
+
+      if (!match?.code) {
+        const detailMessages = await fetchCloudflareTempEmailMessageDetails(config, messages, {
+          limit: pollPayload.detailLimit || 5,
+        });
+        if (detailMessages.length) {
+          const detailMatchResult = pickVerificationMessageWithTimeFallback(detailMessages, {
+            afterTimestamp: pollPayload.filterAfterTimestamp || 0,
+            senderFilters: pollPayload.senderFilters || [],
+            subjectFilters: pollPayload.subjectFilters || [],
+            requiredKeywords: pollPayload.requiredKeywords || [],
+            codePatterns: pollPayload.codePatterns || [],
+            excludeCodes: pollPayload.excludeCodes || [],
+          });
+          if (detailMatchResult.match?.code) {
+            matchResult = detailMatchResult;
+            match = detailMatchResult.match;
+            await addLog(`步骤 ${step}：列表邮件未命中，已通过 Cloudflare Temp Email 邮件详情找到验证码。`, 'warn');
+          }
+        }
+      }
 
       if (match?.code) {
         if (matchResult.usedRelaxedFilters) {
@@ -8637,18 +8759,12 @@ async function exportCurrentSessionJson(options = {}) {
 
   if (format === 'sub2') {
     const sub2Api = getSub2SessionExportApi();
-    const rawContent = sub2Api.buildCodexSessionImportContent(sessionState.session, sessionState.accessToken);
-    let fileContent = rawContent;
-    let parsedContent = null;
-    try {
-      parsedContent = JSON.parse(rawContent);
-      fileContent = JSON.stringify(parsedContent, null, 2);
-    } catch {
-      parsedContent = { accessToken: rawContent };
-      fileContent = JSON.stringify(parsedContent, null, 2);
-    }
+    const exportPayload = await sub2Api.buildCodexSessionImportPayloadForExport(state, {
+      timeoutMs: 15000,
+    });
+    const fileContent = JSON.stringify(exportPayload.payload, null, 2);
     const email = sanitizeSessionExportFileSegment(
-      parsedContent?.user?.email || parsedContent?.email || '',
+      exportPayload.payload?.accounts?.[0]?.name || sessionState.session?.user?.email || sessionState.session?.email || '',
       'chatgpt-session'
     );
     return {
@@ -8656,7 +8772,7 @@ async function exportCurrentSessionJson(options = {}) {
       format,
       fileName: `sub2api-${email}.json`,
       fileContent,
-      warnings: [],
+      warnings: exportPayload.warnings || [],
     };
   }
 
@@ -8868,6 +8984,8 @@ async function waitForTabStableComplete(tabId, options = {}) {
 
 async function waitForTabCompleteUntilStopped(tabId, options = {}) {
   const retryDelayMs = Math.max(100, Math.floor(Number(options.retryDelayMs) || 300));
+  const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || 0));
+  const startedAt = Date.now();
   while (true) {
     throwIfStopped();
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -8876,6 +8994,9 @@ async function waitForTabCompleteUntilStopped(tabId, options = {}) {
     }
     if (tab.status === 'complete') {
       return tab;
+    }
+    if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`等待页面加载完成超时（${Math.round(timeoutMs / 1000)}秒）。`);
     }
     await sleepWithStop(retryDelayMs);
   }
@@ -8904,8 +9025,12 @@ async function ensureContentScriptReadyOnTabUntilStopped(source, tabId, options 
     injectSource = null,
     retryDelayMs = 700,
     logMessage = '',
+    timeoutMs = 0,
   } = options;
   let logged = false;
+  let lastInjectError = null;
+  const startedAt = Date.now();
+  const normalizedTimeoutMs = Math.max(0, Math.floor(Number(timeoutMs) || 0));
 
   while (true) {
     throwIfStopped();
@@ -8934,6 +9059,7 @@ async function ensureContentScriptReadyOnTabUntilStopped(source, tabId, options 
         files: inject,
       });
     } catch (error) {
+      lastInjectError = error;
       console.warn(LOG_PREFIX, `[ensureContentScriptReadyOnTabUntilStopped] inject failed for ${source}:`, error?.message || error);
       if (isUnrecoverableContentScriptInjectError(error)) {
         throw new Error(`${getSourceLabel(source)} 内容脚本文件加载失败：${error?.message || error}。请在扩展管理页重新加载当前扩展，确认文件已包含在已加载的扩展目录中。`);
@@ -8949,6 +9075,10 @@ async function ensureContentScriptReadyOnTabUntilStopped(source, tabId, options 
     if (logMessage && !logged) {
       logged = true;
       await addLog(logMessage, 'warn');
+    }
+    if (normalizedTimeoutMs > 0 && Date.now() - startedAt >= normalizedTimeoutMs) {
+      const reason = lastInjectError?.message || lastInjectError || '内容脚本未响应';
+      throw new Error(`${getSourceLabel(source)} 内容脚本就绪超时（${Math.round(normalizedTimeoutMs / 1000)}秒）：${reason}`);
     }
     await sleepWithStop(retryDelayMs);
   }
@@ -8978,10 +9108,41 @@ function sendTabMessageWithTimeout(tabId, source, message, responseTimeoutMs = g
 
 async function sendTabMessageUntilStopped(tabId, source, message, options = {}) {
   const retryDelayMs = Math.max(100, Math.floor(Number(options.retryDelayMs) || 300));
+  const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || 0));
+  const hasResponseTimeout = timeoutMs > 0 || options.responseTimeoutMs !== undefined;
+  const responseTimeoutMs = Math.max(1000, Math.floor(Number(options.responseTimeoutMs) || 15000));
+  const startedAt = Date.now();
+
+  function getRemainingTimeoutMs() {
+    if (timeoutMs <= 0) {
+      return responseTimeoutMs;
+    }
+    return Math.max(1, Math.min(responseTimeoutMs, timeoutMs - (Date.now() - startedAt)));
+  }
+
+  function sendMessageWithAttemptTimeout() {
+    const attemptTimeoutMs = getRemainingTimeoutMs();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${getSourceLabel(source)} 消息响应超时（${Math.round(attemptTimeoutMs / 1000)}秒）。`));
+      }, attemptTimeoutMs);
+      chrome.tabs.sendMessage(tabId, message).then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      }).catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
+
   while (true) {
     throwIfStopped();
+    if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`${getSourceLabel(source)} 消息发送超时（${Math.round(timeoutMs / 1000)}秒）。`);
+    }
     try {
-      return await chrome.tabs.sendMessage(tabId, message);
+      return await (hasResponseTimeout ? sendMessageWithAttemptTimeout() : chrome.tabs.sendMessage(tabId, message));
     } catch (error) {
       if (!isRetryableContentScriptTransportError(error)) {
         throw error;
@@ -9437,6 +9598,21 @@ function isGpcTaskEndedFailure(error) {
   return /GPC_TASK_ENDED::/i.test(message);
 }
 
+function isHostedCheckoutGenericErrorFailure(error) {
+  const message = getErrorMessage(error);
+  return /HOSTED_CHECKOUT_GENERIC_ERROR::|Things\s+don[’']?t\s+appear\s+to\s+be\s+working\s+at\s+the\s+moment|Sorry,\s*something\s+went\s+wrong\.?\s*Please\s+try\s+again/i.test(message);
+}
+
+function isHostedCheckoutVerificationResendLimitFailure(error) {
+  const message = getErrorMessage(error);
+  return /HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::|PayPal 验证码自动 Resend 重试已达到上限|请尝试在页面手动获取验证码并填入/i.test(message);
+}
+
+function isCloudCheckoutAlreadyPaidFailure(error) {
+  const message = getErrorMessage(error);
+  return /\buser\s+is\s+already\s+paid\b|already\s+(?:paid|subscribed)|already\s+has\s+(?:an?\s+)?(?:active\s+)?subscription|(?:用户|账号|账户)[\s\S]*(?:已|已经)[\s\S]*(?:付费|订阅|开通)|(?:已|已经)[\s\S]*(?:付费|订阅|开通)[\s\S]*(?:用户|账号|账户)|该账号已经开通过\s*ChatGPT\s*订阅套餐/i.test(message);
+}
+
 function isGpcCheckoutRestartRequiredFailure(error) {
   const rawMessage = String(typeof error === 'string' ? error : error?.message || '');
   const message = getErrorMessage(error);
@@ -9462,7 +9638,10 @@ function isPlusCheckoutRestartStep(step, stepExecutionKey = '', state = {}) {
 }
 
 function isPlusCheckoutRestartRequiredFailure(error) {
-  return !isPlusCheckoutNonFreeTrialFailure(error);
+  return !isPlusCheckoutNonFreeTrialFailure(error)
+    && !isHostedCheckoutGenericErrorFailure(error)
+    && !isHostedCheckoutVerificationResendLimitFailure(error)
+    && !isCloudCheckoutAlreadyPaidFailure(error);
 }
 
 function isGoPayCheckoutRestartRequiredFailure(error) {
@@ -10075,6 +10254,8 @@ function getAutoRunTimerResumeOptions(plan) {
       loopOptions: {
         autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
+        autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
+        autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
         mode: normalizedPlan.mode,
       },
       statusPayload: {
@@ -10092,6 +10273,8 @@ function getAutoRunTimerResumeOptions(plan) {
       loopOptions: {
         autoRunSessionId: normalizedPlan.autoRunSessionId,
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
+        autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
+        autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
         mode: 'restart',
         resumeCurrentRun: nextRun,
         resumeAttemptRun: 1,
@@ -10110,6 +10293,8 @@ function getAutoRunTimerResumeOptions(plan) {
     loopOptions: {
       autoRunSessionId: normalizedPlan.autoRunSessionId,
       autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
+      autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
       mode: 'restart',
       resumeCurrentRun: normalizedPlan.currentRun,
       resumeAttemptRun: normalizedPlan.attemptRun,
@@ -10204,6 +10389,8 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
       resumeOptions.statusPayload,
       {
         autoRunSkipFailures: plan.autoRunSkipFailures,
+        autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
+        autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
         autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
@@ -10254,6 +10441,8 @@ async function scheduleAutoRun(totalRuns, options = {}) {
     fireAt: Date.now() + delayMinutes * 60 * 1000,
     totalRuns,
     autoRunSkipFailures: options.autoRunSkipFailures,
+    autoRunRetryNonFreeTrial: options.autoRunRetryNonFreeTrial,
+    autoRunRetryPaypalCallback: options.autoRunRetryPaypalCallback,
     autoRunSessionId: sessionId,
     mode: options.mode,
   });
@@ -10265,6 +10454,8 @@ async function scheduleAutoRun(totalRuns, options = {}) {
 
   await persistAutoRunTimerPlan(timerPlan, {
     autoRunSkipFailures: timerPlan.autoRunSkipFailures,
+    autoRunRetryNonFreeTrial: timerPlan.autoRunRetryNonFreeTrial,
+    autoRunRetryPaypalCallback: timerPlan.autoRunRetryPaypalCallback,
     autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, []),
   });
   await addLog(
@@ -10336,6 +10527,8 @@ async function restoreAutoRunTimerIfNeeded() {
       autoRunSessionId: restoredSessionId,
     }, {
       autoRunSkipFailures: plan.autoRunSkipFailures,
+      autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
     });
   } else {
@@ -10354,6 +10547,8 @@ async function restoreAutoRunTimerIfNeeded() {
     {
       autoRunSessionId: plan.autoRunSessionId,
       autoRunSkipFailures: plan.autoRunSkipFailures,
+      autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
       autoRunTimerPlan: plan,
       scheduledAutoRunPlan: null,
@@ -10407,6 +10602,14 @@ async function skipNode(nodeId) {
 
   await setNodeStatus(normalizedNodeId, 'skipped');
   await addLog(`节点 ${normalizedNodeId} 已跳过`, 'warn');
+
+  if (normalizedNodeId === 'fill-profile' && typeof markCurrentRegistrationAccountUsed === 'function') {
+    const latestState = await getState();
+    await markCurrentRegistrationAccountUsed(latestState, {
+      logPrefix: '步骤 5 跳过',
+      level: 'ok',
+    });
+  }
 
   if (normalizedNodeId === 'open-chatgpt') {
     const latestState = await getState();
@@ -10642,6 +10845,12 @@ async function handleStepData(step, payload) {
         const step5Status = step5NodeId ? latestState.nodeStatuses?.[step5NodeId] : '';
         if (step5NodeId && step5Status !== 'running' && step5Status !== 'completed' && step5Status !== 'manual_completed') {
           await setNodeStatus(step5NodeId, 'skipped');
+          if (typeof markCurrentRegistrationAccountUsed === 'function') {
+            await markCurrentRegistrationAccountUsed(latestState, {
+              logPrefix: '步骤 3 跳过步骤 5',
+              level: 'ok',
+            });
+          }
           await addLog('步骤 3：页面已直接进入已登录态，已自动跳过步骤 5。', 'warn');
         }
       }
@@ -11361,6 +11570,8 @@ async function requestStop(options = {}) {
     }, {
       autoRunSessionId: 0,
       autoRunSkipFailures: timerPlan.autoRunSkipFailures,
+      autoRunRetryNonFreeTrial: timerPlan.autoRunRetryNonFreeTrial,
+      autoRunRetryPaypalCallback: timerPlan.autoRunRetryPaypalCallback,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, timerPlan.roundSummaries),
       autoRunTimerPlan: null,
       scheduledAutoRunPlan: null,
@@ -12333,9 +12544,12 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   getStopRequested: () => stopRequested,
   hasSavedNodeProgress,
   isAddPhoneAuthFailure,
+  isCloudCheckoutAlreadyPaidFailure,
   isPhoneSmsPlatformRateLimitFailure,
   isPlusCheckoutNonFreeTrialFailure,
   isGpcTaskEndedFailure,
+  isHostedCheckoutGenericErrorFailure,
+  isHostedCheckoutVerificationResendLimitFailure,
   isRestartCurrentAttemptError,
   isStep4Route405RecoveryLimitFailure,
   isSignupUserAlreadyExistsFailure,
@@ -13219,6 +13433,8 @@ async function resumeAutoRun() {
   startAutoRunLoop(totalRuns, {
     autoRunSessionId: normalizeAutoRunSessionId(state.autoRunSessionId),
     autoRunSkipFailures: Boolean(state.autoRunSkipFailures),
+    autoRunRetryNonFreeTrial: Boolean(state.autoRunRetryNonFreeTrial),
+    autoRunRetryPaypalCallback: Boolean(state.autoRunRetryPaypalCallback),
     mode: 'continue',
     resumeCurrentRun: currentRun,
     resumeAttemptRun: attemptRun,
@@ -13478,6 +13694,7 @@ const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   buildLocalHelperEndpoint: (baseUrl, path) => buildHotmailLocalEndpoint(baseUrl, path),
   chrome,
   completeNodeFromBackground,
+  createAutomationTab,
   createLocalCliProxyApi: self.MultiPageBackgroundLocalCliProxyApi?.createLocalCliProxyApi,
   ensureContentScriptReadyOnTab,
   getErrorMessage,
@@ -13558,6 +13775,7 @@ const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.c
   markCurrentRegistrationAccountUsed,
   registerTab,
   sendTabMessageUntilStopped,
+  setNodeStatus,
   setState,
   sleepWithStop,
   throwIfStopped,

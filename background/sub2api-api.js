@@ -396,6 +396,52 @@
       }
     }
 
+    function normalizeTimestamp(value) {
+      if (value === undefined || value === null || value === '') {
+        return undefined;
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        const date = new Date((value > 1e11 ? value : value * 1000));
+        return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+      }
+      const date = new Date(String(value));
+      return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+    }
+
+    function epochSecondsFromValue(value) {
+      if (value === undefined || value === null || value === '') {
+        return undefined;
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.trunc(value > 1e11 ? value / 1000 : value);
+      }
+      const parsed = Date.parse(String(value));
+      return Number.isFinite(parsed) ? Math.trunc(parsed / 1000) : undefined;
+    }
+
+    function secondsUntil(expiresAt, now = new Date()) {
+      const expiresTime = Date.parse(String(expiresAt || ''));
+      const nowTime = now instanceof Date && !Number.isNaN(now.getTime()) ? now.getTime() : Date.now();
+      if (!Number.isFinite(expiresTime)) {
+        return undefined;
+      }
+      return Math.max(0, Math.floor((expiresTime - nowTime) / 1000));
+    }
+
+    function stripUnavailable(value) {
+      if (Array.isArray(value)) {
+        return value.map(stripUnavailable);
+      }
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(
+          Object.entries(value)
+            .filter(([, entryValue]) => entryValue !== undefined && entryValue !== null && entryValue !== '')
+            .map(([key, entryValue]) => [key, stripUnavailable(entryValue)])
+        );
+      }
+      return value;
+    }
+
     function resolveCodexSessionImportAccountName(state = {}, session = null, accessToken = '') {
       const sessionObject = normalizeCodexSessionObject(session);
       const claims = parseCodexAccessTokenClaims(accessToken || sessionObject?.accessToken);
@@ -409,6 +455,76 @@
         || normalizeEmailValue(claims?.email)
         || normalizeEmailValue(state?.email)
         || accountIdentifierEmail;
+    }
+
+    function buildSub2ApiAccountDocument(session, accessToken = '', state = {}, options = {}) {
+      const sessionObject = normalizeCodexSessionObject(session);
+      const normalizedAccessToken = normalizeString(accessToken || sessionObject?.accessToken);
+      if (!normalizedAccessToken) {
+        throw new Error('未读取到可导入的 ChatGPT accessToken。');
+      }
+
+      const claims = parseCodexAccessTokenClaims(normalizedAccessToken) || {};
+      const authClaims = claims['https://api.openai.com/auth'] || {};
+      const expiresAt = normalizeTimestamp(
+        sessionObject?.expires
+        || sessionObject?.expiresAt
+        || sessionObject?.expires_at
+      );
+      const accessTokenExpiresAt = normalizeTimestamp(claims.exp);
+      const accountExpiresAt = epochSecondsFromValue(claims.exp)
+        || epochSecondsFromValue(expiresAt);
+      const email = resolveCodexSessionImportAccountName(state, sessionObject, normalizedAccessToken);
+      const accountId = normalizeString(
+        sessionObject?.account?.id
+        || sessionObject?.account_id
+        || sessionObject?.chatgptAccountId
+        || sessionObject?.chatgpt_account_id
+        || authClaims.chatgpt_account_id
+      );
+      const userId = normalizeString(
+        sessionObject?.user?.id
+        || sessionObject?.user_id
+        || sessionObject?.chatgptUserId
+        || sessionObject?.chatgpt_user_id
+        || authClaims.chatgpt_user_id
+        || authClaims.user_id
+      );
+      const planType = normalizeString(
+        sessionObject?.account?.planType
+        || sessionObject?.account?.plan_type
+        || sessionObject?.planType
+        || sessionObject?.plan_type
+        || authClaims.chatgpt_plan_type
+      );
+      const name = email || normalizeString(options.sourceName) || 'ChatGPT Account';
+      const exportedAt = normalizeTimestamp(options.now || new Date());
+
+      return stripUnavailable({
+        name,
+        platform: 'openai',
+        type: 'oauth',
+        expires_at: accountExpiresAt,
+        auto_pause_on_expired: true,
+        concurrency: DEFAULT_CONCURRENCY,
+        priority: resolveSub2ApiAccountPriority(state),
+        credentials: {
+          access_token: normalizedAccessToken,
+          chatgpt_account_id: accountId,
+          chatgpt_user_id: userId,
+          email,
+          expires_at: expiresAt || accessTokenExpiresAt,
+          expires_in: secondsUntil(expiresAt || accessTokenExpiresAt, options.now || new Date()),
+          plan_type: planType,
+          session_token: sessionObject?.sessionToken || sessionObject?.session_token,
+        },
+        extra: {
+          email,
+          name,
+          source: 'chatgpt_web_session',
+          last_refresh: exportedAt,
+        },
+      });
     }
 
     function buildCodexSessionImportContent(session, accessToken = '') {
@@ -432,6 +548,34 @@
       throw new Error('未读取到可导入的 ChatGPT 会话或 accessToken。');
     }
 
+    function buildCodexSessionImportBasePayload(state = {}, session = null, accessToken = '') {
+      const normalizedAccessToken = normalizeString(accessToken || session?.accessToken);
+      const importContent = buildCodexSessionImportContent(session, normalizedAccessToken);
+      const importExpiresAt = resolveCodexSessionImportExpiresAt(session);
+      const preferredAccountName = resolveCodexSessionImportAccountName(state, session, normalizedAccessToken);
+      const accountPriority = resolveSub2ApiAccountPriority(state);
+      const payload = {
+        content: importContent,
+        group_ids: [],
+        ...(preferredAccountName ? { name: preferredAccountName } : {}),
+        priority: accountPriority,
+        auto_pause_on_expired: true,
+        update_existing: true,
+      };
+
+      if (importExpiresAt) {
+        payload.expires_at = importExpiresAt;
+      }
+
+      return {
+        payload,
+        importContent,
+        importExpiresAt,
+        preferredAccountName,
+        accountPriority,
+      };
+    }
+
     function resolveCodexSessionImportExpiresAt(session) {
       const sessionObject = normalizeCodexSessionObject(session);
       const expiresValue = normalizeString(sessionObject?.expires);
@@ -443,6 +587,74 @@
         return null;
       }
       return Math.floor(expiresAtMs / 1000);
+    }
+
+    function hasSub2ApiLoginConfig(state = {}) {
+      return Boolean(
+        normalizeString(state.sub2apiUrl)
+        && normalizeString(state.sub2apiEmail)
+        && String(state.sub2apiPassword || '')
+      );
+    }
+
+    async function buildCodexSessionImportPayloadForExport(state = {}, options = {}) {
+      const session = normalizeCodexSessionObject(state?.session);
+      const accessToken = normalizeString(
+        state?.accessToken
+        || session?.accessToken
+      );
+      const account = buildSub2ApiAccountDocument(session, accessToken, state, options);
+      const document = {
+        exported_at: normalizeTimestamp(options.now || new Date()),
+        proxies: [],
+        accounts: [account],
+      };
+      const warnings = [];
+      const groupNames = state.sub2apiGroupName || DEFAULT_SUB2API_GROUP_NAME;
+      const proxyPreference = resolveSub2ApiProxyPreference(state);
+      const shouldResolveRemote = options.resolveRemote !== false && hasSub2ApiLoginConfig(state);
+
+      if (shouldResolveRemote) {
+        try {
+          const { origin, token } = await loginSub2Api(state, options);
+          const groups = await getGroupsByNames(origin, token, groupNames, options);
+          account.group_ids = groups
+            .map((group) => Number(group?.id))
+            .filter((id) => Number.isFinite(id) && id > 0);
+          if (!account.group_ids.length) {
+            throw new Error('SUB2API 返回的目标分组 ID 无效。');
+          }
+
+          if (proxyPreference) {
+            const proxy = await resolveSub2ApiProxy(origin, token, proxyPreference, options);
+            const proxyId = normalizeProxyId(proxy?.id);
+            if (proxyId) {
+              account.proxy_id = proxyId;
+            }
+          }
+
+          return {
+            payload: document,
+            warnings,
+            resolvedRemote: true,
+          };
+        } catch (error) {
+          warnings.push(`解析 SUB2API 分组 / 代理失败：${error?.message || String(error || '')}。已导出本地模板字段，请手动补全 group_ids / proxy_id 后再提交。`);
+        }
+      } else {
+        warnings.push('未配置完整 SUB2API URL / 邮箱 / 密码，已导出本地模板字段，请手动补全 group_ids / proxy_id 后再提交。');
+      }
+
+      account.group_names = normalizeSub2ApiGroupNames(groupNames);
+      if (proxyPreference) {
+        account.proxy_name = proxyPreference;
+      }
+
+      return {
+        payload: document,
+        warnings,
+        resolvedRemote: false,
+      };
     }
 
     function normalizeCodexSessionImportMessages(messages) {
@@ -726,9 +938,7 @@
         state?.accessToken
         || session?.accessToken
       );
-      const importContent = buildCodexSessionImportContent(session, accessToken);
-      const importExpiresAt = resolveCodexSessionImportExpiresAt(session);
-      const preferredAccountName = resolveCodexSessionImportAccountName(state, session, accessToken);
+      const { payload: importPayload } = buildCodexSessionImportBasePayload(state, session, accessToken);
 
       await logWithOptions(`${logLabel}：正在通过 SUB2API 管理接口登录并准备导入当前 ChatGPT 会话...`, 'info', options);
       const { origin, token } = await loginSub2Api(state, options);
@@ -738,7 +948,6 @@
       const proxyPreference = resolveSub2ApiProxyPreference(state);
       const proxy = proxyPreference ? await resolveSub2ApiProxy(origin, token, proxyPreference, options) : null;
       const proxyId = normalizeProxyId(proxy?.id);
-      const accountPriority = resolveSub2ApiAccountPriority(state);
 
       await logWithOptions(`${logLabel}：已登录 SUB2API，使用分组 ${groupLabel}。`, 'info', options);
       if (proxy) {
@@ -747,24 +956,14 @@
         await logWithOptions(`${logLabel}：未配置 SUB2API 默认代理，本次将不使用代理。`, 'info', options);
       }
 
-      const importPayload = {
-        content: importContent,
-        group_ids: groups
-          .map((group) => Number(group?.id))
-          .filter((id) => Number.isFinite(id) && id > 0),
-        ...(preferredAccountName ? { name: preferredAccountName } : {}),
-        priority: accountPriority,
-        auto_pause_on_expired: true,
-        update_existing: true,
-      };
+      importPayload.group_ids = groups
+        .map((group) => Number(group?.id))
+        .filter((id) => Number.isFinite(id) && id > 0);
       if (!importPayload.group_ids.length) {
         throw new Error('SUB2API 返回的目标分组 ID 无效。');
       }
       if (proxyId) {
         importPayload.proxy_id = proxyId;
-      }
-      if (importExpiresAt) {
-        importPayload.expires_at = importExpiresAt;
       }
 
       await logWithOptions(`${logLabel}：正在导入当前 ChatGPT 会话到 SUB2API...`, 'info', options);
@@ -801,6 +1000,7 @@
     return {
       buildDraftAccountName,
       buildCodexSessionImportContent,
+      buildCodexSessionImportPayloadForExport,
       buildOpenAiCredentials,
       buildOpenAiExtra,
       buildProxyDisplayName,

@@ -118,6 +118,7 @@
       buildLocalHelperEndpoint = null,
       chrome: chromeApi = globalThis.chrome,
       completeNodeFromBackground,
+      createAutomationTab = null,
       createLocalCliProxyApi = null,
       ensureContentScriptReadyOnTab = async () => {},
       getErrorMessage = (error) => error?.message || String(error || '未知错误'),
@@ -152,22 +153,32 @@
       });
     }
 
+    function formatLocalHelperFetchError(endpoint, helperBaseUrl, error) {
+      const originalMessage = normalizeString(error?.message) || 'Failed to fetch';
+      return `本地 helper 请求失败：无法连接 ${endpoint}。请检查本地 hotmail-helper 是否启动（运行 start-hotmail-helper.bat），并确认侧边栏“本地助手地址”为 ${helperBaseUrl}。原始错误：${originalMessage}`;
+    }
+
     async function saveLocalCpaJsonArtifactViaHelper(helperBaseUrl, artifact) {
       const endpoint = typeof buildLocalHelperEndpoint === 'function'
         ? buildLocalHelperEndpoint(helperBaseUrl, '/save-auth-json')
         : new URL('/save-auth-json', `${helperBaseUrl.replace(/\/+$/, '')}/`).toString();
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filePath: artifact.filePath,
-          directoryPath: artifact.directoryPath,
-          content: artifact.jsonText,
-        }),
-      });
+      let response;
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            filePath: artifact.filePath,
+            directoryPath: artifact.directoryPath,
+            content: artifact.jsonText,
+          }),
+        });
+      } catch (error) {
+        throw new Error(formatLocalHelperFetchError(endpoint, helperBaseUrl, error));
+      }
 
       let payload = {};
       try {
@@ -191,8 +202,12 @@
     }
 
     async function openChatGptSessionExportTab(state = {}) {
-      if (chromeApi?.tabs?.create) {
-        const tab = await chromeApi.tabs.create({
+      const createSessionExportTab = typeof createAutomationTab === 'function'
+        ? createAutomationTab
+        : chromeApi?.tabs?.create?.bind(chromeApi.tabs);
+
+      if (createSessionExportTab) {
+        const tab = await createSessionExportTab({
           url: CHATGPT_SESSION_EXPORT_URL,
           active: false,
         });

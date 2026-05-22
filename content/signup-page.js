@@ -514,7 +514,7 @@ async function handle405ResendError(step, remainingTimeout = 30000) {
 // Signup Entry Helpers
 // ============================================================
 
-const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|sign\s*up|register|create\s*account|create\s+account/i;
+const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|创建(?:账号|帐号|账户|帐户)|sign\s*up|register|create\s*account|create\s+account|get\s*started/i;
 const SIGNUP_EMAIL_INPUT_SELECTOR = [
   'input[type="email"]',
   'input[autocomplete="email"]',
@@ -575,10 +575,11 @@ function getSignupEmailInput() {
     const placeholder = String(el.getAttribute?.('placeholder') || '').trim();
     const ariaLabel = String(el.getAttribute?.('aria-label') || '').trim();
     const autocomplete = String(el.getAttribute?.('autocomplete') || '').trim().toLowerCase();
+    const autocompleteTokens = autocomplete.split(/\s+/).filter(Boolean);
     const combinedText = `${placeholder} ${ariaLabel}`;
     return type === 'email'
-      || autocomplete === 'email'
-      || autocomplete === 'username'
+      || autocompleteTokens.includes('email')
+      || autocompleteTokens.includes('username')
       || /email|username/i.test(`${name} ${id}`)
       || /email|电子邮件|邮箱/i.test(combinedText);
   });
@@ -712,32 +713,6 @@ function inspectSignupEntryState() {
     };
   }
 
-  const postVerificationState = typeof getStep4PostVerificationState === 'function'
-    ? getStep4PostVerificationState()
-    : null;
-  if (postVerificationState?.state === 'step5') {
-    return {
-      state: 'profile_page',
-      url: postVerificationState.url || location.href,
-    };
-  }
-
-  if (postVerificationState?.state === 'logged_in_home') {
-    return {
-      state: 'logged_in_home',
-      skipProfileStep: true,
-      url: postVerificationState.url || location.href,
-    };
-  }
-
-  if (typeof isVerificationPageStillVisible === 'function' && isVerificationPageStillVisible()) {
-    return {
-      state: 'verification_page',
-      verificationTarget: typeof getVerificationCodeTarget === 'function' ? getVerificationCodeTarget() : null,
-      url: location.href,
-    };
-  }
-
   const passwordInput = getSignupPasswordInput();
   if (isSignupPasswordPage() && passwordInput) {
     return {
@@ -771,11 +746,46 @@ function inspectSignupEntryState() {
     };
   }
 
+  const postVerificationState = typeof getStep4PostVerificationState === 'function'
+    ? getStep4PostVerificationState()
+    : null;
+  if (postVerificationState?.state === 'step5') {
+    return {
+      state: 'profile_page',
+      url: postVerificationState.url || location.href,
+    };
+  }
+
+  if (postVerificationState?.state === 'logged_in_home') {
+    return {
+      state: 'logged_in_home',
+      skipProfileStep: true,
+      url: postVerificationState.url || location.href,
+    };
+  }
+
+  if (typeof isVerificationPageStillVisible === 'function' && isVerificationPageStillVisible()) {
+    return {
+      state: 'verification_page',
+      verificationTarget: typeof getVerificationCodeTarget === 'function' ? getVerificationCodeTarget() : null,
+      url: location.href,
+    };
+  }
+
   const signupTrigger = findSignupEntryTrigger();
   if (signupTrigger) {
     return {
       state: 'entry_home',
       signupTrigger,
+      url: location.href,
+    };
+  }
+
+  const switchToEmailTrigger = findSignupUseEmailTrigger();
+  if (switchToEmailTrigger) {
+    return {
+      state: 'email_choice_entry',
+      switchToEmailTrigger,
       url: location.href,
     };
   }
@@ -1119,7 +1129,7 @@ async function waitForSignupEntryState(options = {}) {
       return snapshot;
     }
 
-    if (snapshot.state === 'phone_entry') {
+    if (snapshot.state === 'phone_entry' || snapshot.state === 'email_choice_entry') {
       if (!autoOpenEntry) {
         return snapshot;
       }
@@ -1128,16 +1138,22 @@ async function waitForSignupEntryState(options = {}) {
         lastSwitchToEmailAt = Date.now();
         loggedMissingSwitchToEmail = false;
         if (logDiagnostics) {
-          log(`步骤 ${step}：检测到手机号输入模式，准备点击切换邮箱入口："${getActionText(snapshot.switchToEmailTrigger).slice(0, 80)}"`);
+          log(snapshot.state === 'phone_entry'
+            ? `步骤 ${step}：检测到手机号输入模式，准备点击切换邮箱入口："${getActionText(snapshot.switchToEmailTrigger).slice(0, 80)}"`
+            : `步骤 ${step}：检测到组合认证入口，准备点击邮箱入口："${getActionText(snapshot.switchToEmailTrigger).slice(0, 80)}"`);
         }
-        log('步骤 2：检测到手机号输入模式，正在切换到邮箱输入模式...');
+        log(snapshot.state === 'phone_entry'
+          ? '步骤 2：检测到手机号输入模式，正在切换到邮箱输入模式...'
+          : '步骤 2：检测到组合认证入口，正在打开邮箱输入模式...');
         await humanPause(350, 900);
         await performOperationWithDelay({ stepKey: 'signup-entry', kind: 'click', label: 'switch-to-signup-email' }, async () => {
           simulateClick(snapshot.switchToEmailTrigger);
         });
       } else if (!snapshot.switchToEmailTrigger && !loggedMissingSwitchToEmail) {
         loggedMissingSwitchToEmail = true;
-        log('步骤 2：检测到手机号输入模式，但暂未识别到“改用邮箱/继续使用电子邮件地址登录”按钮，继续等待界面稳定...', 'warn');
+        log(snapshot.state === 'phone_entry'
+          ? '步骤 2：检测到手机号输入模式，但暂未识别到“改用邮箱/继续使用电子邮件地址登录”按钮，继续等待界面稳定...'
+          : '步骤 2：检测到组合认证入口，但暂未识别到“继续使用邮箱”按钮，继续等待界面稳定...', 'warn');
       }
 
       if (logDiagnostics && !slowSnapshotLogged && Date.now() - start >= 5000) {
@@ -1196,14 +1212,48 @@ async function waitForSignupEntryState(options = {}) {
   return finalSnapshot;
 }
 
-async function ensureSignupEntryReady(timeout = 15000) {
-  const snapshot = await waitForSignupEntryState({ timeout, autoOpenEntry: false });
-  if (snapshot.state === 'entry_home' || snapshot.state === 'phone_entry' || snapshot.state === 'email_entry' || snapshot.state === 'password_page') {
+function isUnifiedAuthLoginEntryPage() {
+  return /\/auth\/login(?:[/?#]|$)/i.test(location.pathname || '');
+}
+
+function normalizeSignupEntryReadyResult(snapshot) {
+  if (snapshot.state === 'entry_home' || snapshot.state === 'email_choice_entry' || snapshot.state === 'phone_entry' || snapshot.state === 'email_entry' || snapshot.state === 'password_page') {
     return {
       ready: true,
       state: snapshot.state,
       url: snapshot.url || location.href,
     };
+  }
+  return null;
+}
+
+async function ensureSignupEntryReady(timeout = 25000) {
+  let snapshot = await waitForSignupEntryState({ timeout, autoOpenEntry: false });
+  let normalizedReadyResult = normalizeSignupEntryReadyResult(snapshot);
+  if (normalizedReadyResult) {
+    return normalizedReadyResult;
+  }
+
+  // ChatGPT /auth/login can finish hydrating the email form shortly after the
+  // initial route paint. Give that route one extra focused pass before failing.
+  if (isUnifiedAuthLoginEntryPage()) {
+    await sleep(1200);
+    snapshot = inspectSignupEntryState();
+    normalizedReadyResult = normalizeSignupEntryReadyResult(snapshot);
+    if (normalizedReadyResult) {
+      return normalizedReadyResult;
+    }
+
+    snapshot = await waitForSignupEntryState({
+      timeout: Math.max(4000, Math.min(10000, Math.floor(timeout / 2))),
+      autoOpenEntry: false,
+      step: 2,
+      logDiagnostics: true,
+    });
+    normalizedReadyResult = normalizeSignupEntryReadyResult(snapshot);
+    if (normalizedReadyResult) {
+      return normalizedReadyResult;
+    }
   }
 
   log(`注册入口识别失败，诊断快照：${JSON.stringify(getSignupEntryDiagnostics())}`, 'warn');
@@ -1258,7 +1308,7 @@ async function fillSignupEmailAndContinue(email, step) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
 
   const snapshot = await waitForSignupEntryState({
-    timeout: 20000,
+    timeout: step === 2 && isUnifiedAuthLoginEntryPage() ? 30000 : 20000,
     autoOpenEntry: true,
     step,
     logDiagnostics: step === 2,
@@ -2967,6 +3017,10 @@ function getStep4PostVerificationState(options = {}) {
       state: 'step5',
       url: location.href,
     };
+  }
+
+  if (getSignupEmailInput() || getSignupPhoneInput() || getSignupPasswordInput()) {
+    return null;
   }
 
   if (isLikelyLoggedInChatgptHomeUrl()) {

@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GuJumpgate 0.1.3</title>
+  <title>GuJumpgate  V0.1.4</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -25,7 +25,7 @@
       <div class="header-version-block">
         <div class="header-version-main">
           <button id="extension-update-status" class="header-version-title header-version-link" type="button"
-          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate 0.1.3</button>
+          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate  V0.1.4</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -381,13 +381,13 @@
           placeholder="1234567890" />
       </div>
       <div class="data-row data-check-row" id="row-hosted-checkout-sms-pool" style="display:none;">
-        <span class="data-label">Hosted 接码池</span>
+        <span class="data-label">PayPal 接码池</span>
         <div class="hotmail-import-box hosted-sms-pool-box">
           <textarea id="input-hosted-checkout-sms-pool" class="data-textarea mono" hidden
             placeholder="1234567890&#10;&#10;https://mail.test.com/api/text-relay/eca_tr_xxxxxxxxx"></textarea>
           <div class="section-mini-header">
             <div class="section-mini-copy">
-              <span class="section-label">Hosted 接码池</span>
+              <span class="section-label">PayPal 接码池</span>
               <span class="data-value">号码和验证码接口按行绑定</span>
             </div>
             <div class="section-mini-actions">
@@ -407,7 +407,7 @@
               <button id="btn-hosted-sms-pool-import" class="btn btn-primary btn-sm" type="button">导入号码</button>
             </div>
             <div class="icloud-card">
-              <div id="hosted-sms-pool-summary" class="icloud-summary">导入 PayPal Hosted 接码号码，每行一个号码和验证码接口。</div>
+              <div id="hosted-sms-pool-summary" class="icloud-summary">导入 PayPal 接码号码，每行一个号码和验证码接口。</div>
               <div class="icloud-toolbar">
                 <input id="input-hosted-sms-pool-search" class="data-input icloud-search" type="text"
                   placeholder="搜索号码 / 接口" />
@@ -683,7 +683,7 @@
       <div class="data-row" id="row-auto-run-controls">
         <span class="data-label">注册邮箱</span>
         <div class="data-inline">
-          <input type="text" id="input-email" class="data-input" placeholder="由 Hotmail 账号池自动分配" />
+          <input type="text" id="input-email" class="data-input" placeholder="由 微软邮箱账户池 自动分配" />
           <button id="btn-fetch-email" class="btn btn-outline btn-sm data-inline-btn" type="button">获取</button>
         </div>
       </div>
@@ -736,6 +736,26 @@
           <div class="setting-group setting-group-primary">
             <label class="toggle-switch" for="input-auto-skip-failures">
               <input type="checkbox" id="input-auto-skip-failures" />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+          <div class="setting-group auto-run-retry-non-free-trial-setting">
+            <span class="setting-caption">无试用套餐自动重试</span>
+            <label class="toggle-switch" for="input-auto-run-retry-non-free-trial"
+              title="开启后，步骤 6 检测到今日应付金额非 0 时会换新邮箱重走流程">
+              <input type="checkbox" id="input-auto-run-retry-non-free-trial" />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+          <div class="setting-group auto-run-retry-paypal-callback-setting">
+            <span class="setting-caption">PAYPAL回调自动重试</span>
+            <label class="toggle-switch" for="input-auto-run-retry-paypal-callback"
+              title="开启后，PayPal Checkout 回调异常时会换新邮箱重走流程">
+              <input type="checkbox" id="input-auto-run-retry-paypal-callback" />
               <span class="toggle-switch-track" aria-hidden="true">
                 <span class="toggle-switch-thumb"></span>
               </span>
@@ -904,7 +924,7 @@
     <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
       <div class="section-mini-header">
         <div class="section-mini-copy">
-          <span class="section-label">Hotmail 账号池</span>
+          <span class="section-label">微软邮箱账户池</span>
         </div>
         <div class="section-mini-actions">
           <button id="btn-toggle-hotmail-form" class="btn btn-outline btn-xs" type="button"

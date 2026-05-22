@@ -35,6 +35,7 @@
       exportCurrentSessionJson,
       exportSettingsBundle,
       fetchHostedCheckoutVerificationCodeManually = null,
+      testCheckoutConversionProxy = null,
       fetchGeneratedEmail,
       refreshGpcCardBalance,
       finalizePhoneActivationAfterSuccessfulFlow,
@@ -1854,6 +1855,27 @@
             ok: true,
             code: String(result?.code || '').trim(),
             verificationUrl: String(result?.verificationUrl || '').trim(),
+          };
+        }
+
+        case 'TEST_PLUS_CHECKOUT_CONVERSION_PROXY': {
+          const state = await getState();
+          if (isAutoRunLockedState(state)) {
+            throw new Error('自动流程运行中，当前不能测试支付转换代理。');
+          }
+          if (typeof testCheckoutConversionProxy !== 'function') {
+            throw new Error('支付转换代理测试能力尚未接入。');
+          }
+          const result = await testCheckoutConversionProxy(message.payload || {});
+          return {
+            ok: true,
+            proxyDisplayName: String(result?.proxyDisplayName || '').trim(),
+            exitIp: String(result?.exitIp || '').trim(),
+            exitRegion: String(result?.exitRegion || '').trim(),
+            exitSource: String(result?.exitSource || '').trim(),
+            exitEndpoint: String(result?.exitEndpoint || '').trim(),
+            targetEndpoint: String(result?.targetEndpoint || '').trim(),
+            diagnostics: String(result?.diagnostics || '').trim(),
           };
         }
 

@@ -1377,11 +1377,13 @@
       const normalizedPaymentMethod = normalizePlusPaymentMethod(paymentMethod || state?.plusPaymentMethod);
       const checkoutCountry = resolveMeiguodizhiCountryCode(countryOverride);
       const savedCheckoutCountry = resolveMeiguodizhiCountryCode(state.plusCheckoutCountry);
-      const exitCountry = resolveMeiguodizhiCountryCode(
-        state.ipProxyAppliedExitRegion
-        || state.ipProxyExitRegion
-        || ''
-      );
+      const exitCountry = typeof probeIpProxyExit === 'function'
+        ? resolveMeiguodizhiCountryCode(
+          state.ipProxyAppliedExitRegion
+          || state.ipProxyExitRegion
+          || ''
+        )
+        : '';
 
       if (normalizedPaymentMethod === PLUS_PAYMENT_METHOD_GOPAY) {
         const countryCode = exitCountry || checkoutCountry || savedCheckoutCountry || 'ID';

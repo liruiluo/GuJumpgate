@@ -197,6 +197,14 @@ const rowPlusHostedCheckoutOauthDelay = document.getElementById('row-plus-hosted
 const inputPlusHostedCheckoutOauthDelaySeconds = document.getElementById('input-plus-hosted-checkout-oauth-delay-seconds');
 const rowPlusCheckoutConversionProxy = document.getElementById('row-plus-checkout-conversion-proxy');
 const inputPlusCheckoutConversionProxy = document.getElementById('input-plus-checkout-conversion-proxy');
+const rowPlusCheckoutConversionProxyTest = document.getElementById('row-plus-checkout-conversion-proxy-test');
+const btnPlusCheckoutConversionProxyTest = document.getElementById('btn-plus-checkout-conversion-proxy-test');
+const inputPlusCheckoutCloudConversionEnabled = document.getElementById('input-plus-checkout-cloud-conversion-enabled');
+const rowPlusCheckoutCloudConversionApiUrl = document.getElementById('row-plus-checkout-cloud-conversion-api-url');
+const inputPlusCheckoutCloudConversionApiUrl = document.getElementById('input-plus-checkout-cloud-conversion-api-url');
+const rowPlusCheckoutCloudConversionApiKey = document.getElementById('row-plus-checkout-cloud-conversion-api-key');
+const inputPlusCheckoutCloudConversionApiKey = document.getElementById('input-plus-checkout-cloud-conversion-api-key');
+const displayPlusCheckoutConversionProxyTestResult = document.getElementById('display-plus-checkout-conversion-proxy-test-result');
 const rowHostedCheckoutVerificationUrl = document.getElementById('row-hosted-checkout-verification-url');
 const inputHostedCheckoutVerificationUrl = document.getElementById('input-hosted-checkout-verification-url');
 const rowHostedCheckoutManualFetch = document.getElementById('row-hosted-checkout-manual-fetch');
@@ -555,6 +563,8 @@ const stepsList = document.querySelector('.steps-list');
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
+const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH = 'oauth';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_SUB2API_CODEX_SESSION = 'sub2api_codex_session';
 const PLUS_ACCOUNT_ACCESS_STRATEGY_CPA_CODEX_SESSION = 'cpa_codex_session';
@@ -2957,6 +2967,24 @@ function normalizePlusCheckoutConversionProxyUrlValue(value = '') {
   }
 }
 
+function normalizePlusCheckoutCloudConversionApiUrlValue(value = '') {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) {
+    return '';
+  }
+  try {
+    const parsed = new URL(rawValue);
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return rawValue;
+  }
+}
+
+function normalizePlusCheckoutCloudConversionApiKeyValue(value = '') {
+  return String(value || '').trim();
+}
+
 function normalizeHostedCheckoutVerificationUrlValue(value = '') {
   const rawValue = String(value || '').trim();
   if (!rawValue) {
@@ -4363,6 +4391,11 @@ function collectSettingsPayload() {
     plusHostedCheckoutOauthDelaySeconds: typeof inputPlusHostedCheckoutOauthDelaySeconds !== 'undefined' && inputPlusHostedCheckoutOauthDelaySeconds
       ? normalizePlusHostedCheckoutOauthDelaySeconds(inputPlusHostedCheckoutOauthDelaySeconds.value)
       : 0,
+    plusCheckoutCloudConversionEnabled: typeof inputPlusCheckoutCloudConversionEnabled !== 'undefined' && inputPlusCheckoutCloudConversionEnabled
+      ? Boolean(inputPlusCheckoutCloudConversionEnabled.checked)
+      : false,
+    plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
+    plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
     plusCheckoutConversionProxyUrl: typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy
       ? normalizePlusCheckoutConversionProxyUrlValue(inputPlusCheckoutConversionProxy.value)
       : '',
@@ -8791,6 +8824,7 @@ function updatePlusModeUI() {
   [
     typeof rowPlusHostedCheckoutOauthDelay !== 'undefined' ? rowPlusHostedCheckoutOauthDelay : null,
     typeof rowPlusCheckoutConversionProxy !== 'undefined' ? rowPlusCheckoutConversionProxy : null,
+    typeof rowPlusCheckoutConversionProxyTest !== 'undefined' ? rowPlusCheckoutConversionProxyTest : null,
     typeof rowHostedCheckoutVerificationUrl !== 'undefined' ? rowHostedCheckoutVerificationUrl : null,
     typeof rowHostedCheckoutManualFetch !== 'undefined' ? rowHostedCheckoutManualFetch : null,
     typeof rowHostedCheckoutVerificationPopupDelay !== 'undefined' ? rowHostedCheckoutVerificationPopupDelay : null,
@@ -8802,6 +8836,7 @@ function updatePlusModeUI() {
     }
     row.style.display = enabled && selectedMethod === paypalValue ? '' : 'none';
   });
+  updatePlusCheckoutConversionModeUi();
   if (typeof rowHostedCheckoutSmsPool !== 'undefined' && rowHostedCheckoutSmsPool) {
     if (enabled && selectedMethod === paypalValue) {
       if (hostedSmsPoolExpanded && typeof queueHostedSmsPoolRefresh === 'function') {
@@ -10078,9 +10113,19 @@ function applySettingsState(state) {
       normalizePlusHostedCheckoutOauthDelaySeconds(state?.plusHostedCheckoutOauthDelaySeconds)
     );
   }
+  if (typeof inputPlusCheckoutCloudConversionEnabled !== 'undefined' && inputPlusCheckoutCloudConversionEnabled) {
+    inputPlusCheckoutCloudConversionEnabled.checked = Boolean(state?.plusCheckoutCloudConversionEnabled);
+  }
+  if (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl) {
+    inputPlusCheckoutCloudConversionApiUrl.value = normalizePlusCheckoutCloudConversionApiUrlValue(state?.plusCheckoutCloudConversionApiUrl || '');
+  }
+  if (typeof inputPlusCheckoutCloudConversionApiKey !== 'undefined' && inputPlusCheckoutCloudConversionApiKey) {
+    inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(state?.plusCheckoutCloudConversionApiKey || '');
+  }
   if (typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy) {
     inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(state?.plusCheckoutConversionProxyUrl || '');
   }
+  updatePlusCheckoutConversionModeUi();
   if (typeof inputHostedCheckoutVerificationPopupDelaySeconds !== 'undefined' && inputHostedCheckoutVerificationPopupDelaySeconds) {
     inputHostedCheckoutVerificationPopupDelaySeconds.value = String(
       normalizeHostedCheckoutVerificationPopupDelaySeconds(state?.hostedCheckoutVerificationPopupDelaySeconds)
@@ -13320,6 +13365,10 @@ stepsList?.addEventListener('click', async (event) => {
       if (!hostedCheckoutValidation.valid) {
         throw new Error(hostedCheckoutValidation.message || 'Hosted checkout 配置不完整。');
       }
+      const cloudCheckoutValidation = validatePlusCheckoutCloudConversionConfig({ focusOnError: true });
+      if (!cloudCheckoutValidation.valid) {
+        throw new Error(cloudCheckoutValidation.message || '云端支付转换配置不完整。');
+      }
     }
     if (step === gpcCreateStep && !(await ensureGpcApiKeyReadyForStart())) {
       return;
@@ -13632,6 +13681,11 @@ async function startAutoRunFromCurrentSettings() {
   if (!hostedCheckoutValidation.valid) {
     clearPendingAutoRunStartRunCount();
     throw new Error(hostedCheckoutValidation.message || 'Hosted checkout 配置不完整。');
+  }
+  const cloudCheckoutValidation = validatePlusCheckoutCloudConversionConfig({ focusOnError: true });
+  if (!cloudCheckoutValidation.valid) {
+    clearPendingAutoRunStartRunCount();
+    throw new Error(cloudCheckoutValidation.message || '云端支付转换配置不完整。');
   }
   if (!(await ensureGpcApiKeyReadyForStart())) {
     clearPendingAutoRunStartRunCount();
@@ -15372,6 +15426,184 @@ function syncHostedCheckoutVerificationPopupDelayInput() {
   );
 }
 
+function setPlusCheckoutConversionProxyTestResult(message = '未测试', options = {}) {
+  if (!displayPlusCheckoutConversionProxyTestResult) {
+    return;
+  }
+  const normalizedMessage = String(message || '').trim() || '未测试';
+  const status = String(options?.status || 'idle').trim().toLowerCase();
+  const detail = String(options?.detail || '').trim();
+  displayPlusCheckoutConversionProxyTestResult.textContent = normalizedMessage;
+  displayPlusCheckoutConversionProxyTestResult.title = detail || normalizedMessage;
+  displayPlusCheckoutConversionProxyTestResult.classList.remove('status-running', 'status-success', 'status-error');
+  if (status === 'running') {
+    displayPlusCheckoutConversionProxyTestResult.classList.add('status-running');
+  } else if (status === 'success') {
+    displayPlusCheckoutConversionProxyTestResult.classList.add('status-success');
+  } else if (status === 'error') {
+    displayPlusCheckoutConversionProxyTestResult.classList.add('status-error');
+  }
+}
+
+function isPlusCheckoutCloudConversionEnabled() {
+  if (typeof inputPlusCheckoutCloudConversionEnabled !== 'undefined' && inputPlusCheckoutCloudConversionEnabled) {
+    return Boolean(inputPlusCheckoutCloudConversionEnabled.checked);
+  }
+  return Boolean(latestState?.plusCheckoutCloudConversionEnabled);
+}
+
+function validatePlusCheckoutCloudConversionConfig(options = {}) {
+  const method = normalizePlusPaymentMethod(
+    typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod
+      ? selectPlusPaymentMethod.value
+      : latestState?.plusPaymentMethod
+  );
+  if (method !== DEFAULT_PLUS_PAYMENT_METHOD || !isPlusCheckoutCloudConversionEnabled()) {
+    return { valid: true, message: '' };
+  }
+
+  const normalizedApiUrl = normalizePlusCheckoutCloudConversionApiUrlValue(
+    BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL
+      || (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl
+        ? inputPlusCheckoutCloudConversionApiUrl.value
+        : latestState?.plusCheckoutCloudConversionApiUrl)
+  );
+  if (!normalizedApiUrl) {
+    return {
+      valid: false,
+      message: '云端支付转换服务地址未内置成功，请联系开发者检查扩展配置。',
+    };
+  }
+
+  try {
+    const parsed = new URL(normalizedApiUrl);
+    if (!/^https?:$/i.test(String(parsed.protocol || ''))) {
+      throw new Error('unsupported protocol');
+    }
+  } catch {
+    return {
+      valid: false,
+      message: '云端支付转换服务地址不是有效的 HTTP/HTTPS URL。',
+    };
+  }
+
+  return { valid: true, message: '' };
+}
+
+function updatePlusCheckoutConversionModeUi() {
+  const cloudEnabled = isPlusCheckoutCloudConversionEnabled();
+  const plusModeEnabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
+    ? Boolean(inputPlusModeEnabled.checked)
+    : Boolean(latestState?.plusModeEnabled);
+  const selectedMethod = normalizePlusPaymentMethod(
+    typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod
+      ? selectPlusPaymentMethod.value
+      : latestState?.plusPaymentMethod
+  );
+  const paypalMode = selectedMethod === DEFAULT_PLUS_PAYMENT_METHOD;
+  const cloudRowsVisible = plusModeEnabled && paypalMode && cloudEnabled;
+
+  if (typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy) {
+    inputPlusCheckoutConversionProxy.disabled = cloudEnabled;
+    inputPlusCheckoutConversionProxy.readOnly = cloudEnabled;
+    inputPlusCheckoutConversionProxy.setAttribute('aria-disabled', cloudEnabled ? 'true' : 'false');
+    inputPlusCheckoutConversionProxy.title = cloudEnabled
+      ? '已启用云端支付转换，本地支付转换代理已锁定且不会生效。'
+      : '仅在第 6 步创建 checkout 并跳转 pay.openai.com / Stripe hosted checkout 时临时生效；留空则沿用当前网络环境';
+  }
+  if (typeof btnPlusCheckoutConversionProxyTest !== 'undefined' && btnPlusCheckoutConversionProxyTest) {
+    btnPlusCheckoutConversionProxyTest.disabled = cloudEnabled;
+    btnPlusCheckoutConversionProxyTest.setAttribute('aria-disabled', cloudEnabled ? 'true' : 'false');
+    btnPlusCheckoutConversionProxyTest.title = cloudEnabled
+      ? '已启用云端支付转换，本地支付转换代理测试不可用。'
+      : '';
+  }
+  if (typeof rowPlusCheckoutCloudConversionApiUrl !== 'undefined' && rowPlusCheckoutCloudConversionApiUrl) {
+    rowPlusCheckoutCloudConversionApiUrl.style.display = cloudRowsVisible ? '' : 'none';
+  }
+  if (typeof rowPlusCheckoutCloudConversionApiKey !== 'undefined' && rowPlusCheckoutCloudConversionApiKey) {
+    rowPlusCheckoutCloudConversionApiKey.style.display = cloudRowsVisible ? '' : 'none';
+  }
+  if (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl) {
+    inputPlusCheckoutCloudConversionApiUrl.disabled = !cloudEnabled;
+  }
+  if (typeof inputPlusCheckoutCloudConversionApiKey !== 'undefined' && inputPlusCheckoutCloudConversionApiKey) {
+    inputPlusCheckoutCloudConversionApiKey.disabled = !cloudEnabled;
+  }
+
+  if (cloudEnabled) {
+    setPlusCheckoutConversionProxyTestResult('云端模式', {
+      detail: '已启用云端支付转换，本地支付转换代理与代理测试已自动停用。',
+    });
+  } else {
+    setPlusCheckoutConversionProxyTestResult('未测试');
+  }
+}
+
+async function handlePlusCheckoutConversionProxyTest() {
+  if (!btnPlusCheckoutConversionProxyTest || !inputPlusCheckoutConversionProxy) {
+    return;
+  }
+
+  const proxyUrl = normalizePlusCheckoutConversionProxyUrlValue(inputPlusCheckoutConversionProxy.value);
+  inputPlusCheckoutConversionProxy.value = proxyUrl;
+  if (!proxyUrl) {
+    setPlusCheckoutConversionProxyTestResult('请先填写代理', {
+      status: 'error',
+      detail: '请先填写支付转换代理地址，再执行测试。',
+    });
+    showToast('请先填写支付转换代理地址。', 'error');
+    return;
+  }
+
+  const previousLabel = btnPlusCheckoutConversionProxyTest.textContent;
+  btnPlusCheckoutConversionProxyTest.disabled = true;
+  btnPlusCheckoutConversionProxyTest.textContent = '测试中...';
+  setPlusCheckoutConversionProxyTestResult('测试中...', {
+    status: 'running',
+    detail: '正在检测代理出口和 chatgpt.com 可达性。',
+  });
+
+  try {
+    const response = await sendRuntimeMessageWithTimeout({
+      type: 'TEST_PLUS_CHECKOUT_CONVERSION_PROXY',
+      source: 'sidepanel',
+      payload: {
+        proxyUrl,
+      },
+    }, 45000, '支付转换代理测试');
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    const exitIp = String(response?.exitIp || '').trim();
+    const exitRegion = String(response?.exitRegion || '').trim();
+    const exitSummary = exitIp
+      ? `${exitIp}${exitRegion ? ` [${exitRegion}]` : ''}`
+      : '已连通';
+    const detailParts = [
+      response?.proxyDisplayName ? `代理：${response.proxyDisplayName}` : '',
+      response?.exitEndpoint ? `出口探测：${response.exitEndpoint}` : '',
+      response?.targetEndpoint ? `目标连通：${response.targetEndpoint}` : '',
+      response?.diagnostics ? `诊断：${response.diagnostics}` : '',
+    ].filter(Boolean);
+    setPlusCheckoutConversionProxyTestResult(`可用: ${exitSummary}`, {
+      status: 'success',
+      detail: detailParts.join(' | ') || `代理测试通过：${exitSummary}`,
+    });
+    showToast(`支付转换代理测试通过：${exitSummary}`, 'success', 2500);
+  } catch (error) {
+    const message = error?.message || String(error || '支付转换代理测试失败');
+    setPlusCheckoutConversionProxyTestResult('测试失败', {
+      status: 'error',
+      detail: message,
+    });
+    showToast(message, 'error');
+  } finally {
+    btnPlusCheckoutConversionProxyTest.disabled = false;
+    btnPlusCheckoutConversionProxyTest.textContent = previousLabel || '测试代理';
+  }
+}
+
 async function handleHostedCheckoutManualFetch() {
   if (!btnHostedCheckoutManualFetch) {
     return;
@@ -15433,11 +15665,43 @@ inputPlusHostedCheckoutOauthDelaySeconds?.addEventListener('blur', () => {
 });
 
 inputPlusCheckoutConversionProxy?.addEventListener('input', () => {
+  setPlusCheckoutConversionProxyTestResult('未测试');
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
 });
 inputPlusCheckoutConversionProxy?.addEventListener('blur', () => {
   inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(inputPlusCheckoutConversionProxy.value);
+  setPlusCheckoutConversionProxyTestResult('未测试');
+  saveSettings({ silent: true }).catch(() => { });
+});
+btnPlusCheckoutConversionProxyTest?.addEventListener('click', () => {
+  handlePlusCheckoutConversionProxyTest().catch((error) => {
+    showToast(error?.message || String(error || '支付转换代理测试失败'), 'error');
+  });
+});
+
+inputPlusCheckoutCloudConversionEnabled?.addEventListener('change', () => {
+  updatePlusCheckoutConversionModeUi();
+  validatePlusCheckoutCloudConversionConfig();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputPlusCheckoutCloudConversionApiUrl?.addEventListener('input', () => {
+  validatePlusCheckoutCloudConversionConfig();
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputPlusCheckoutCloudConversionApiUrl?.addEventListener('blur', () => {
+  inputPlusCheckoutCloudConversionApiUrl.value = normalizePlusCheckoutCloudConversionApiUrlValue(inputPlusCheckoutCloudConversionApiUrl.value);
+  validatePlusCheckoutCloudConversionConfig();
+  saveSettings({ silent: true }).catch(() => { });
+});
+inputPlusCheckoutCloudConversionApiKey?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputPlusCheckoutCloudConversionApiKey?.addEventListener('blur', () => {
+  inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(inputPlusCheckoutCloudConversionApiKey.value);
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -16482,8 +16746,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           normalizePlusHostedCheckoutOauthDelaySeconds(message.payload.plusHostedCheckoutOauthDelaySeconds)
         );
       }
+      if (message.payload.plusCheckoutCloudConversionEnabled !== undefined && inputPlusCheckoutCloudConversionEnabled) {
+        inputPlusCheckoutCloudConversionEnabled.checked = Boolean(message.payload.plusCheckoutCloudConversionEnabled);
+        updatePlusCheckoutConversionModeUi();
+      }
+      if (message.payload.plusCheckoutCloudConversionApiUrl !== undefined && inputPlusCheckoutCloudConversionApiUrl) {
+        inputPlusCheckoutCloudConversionApiUrl.value = normalizePlusCheckoutCloudConversionApiUrlValue(message.payload.plusCheckoutCloudConversionApiUrl);
+        validatePlusCheckoutCloudConversionConfig();
+      }
+      if (message.payload.plusCheckoutCloudConversionApiKey !== undefined && inputPlusCheckoutCloudConversionApiKey) {
+        inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(message.payload.plusCheckoutCloudConversionApiKey);
+      }
       if (message.payload.plusCheckoutConversionProxyUrl !== undefined && inputPlusCheckoutConversionProxy) {
         inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(message.payload.plusCheckoutConversionProxyUrl);
+        updatePlusCheckoutConversionModeUi();
       }
       if (message.payload.hostedCheckoutVerificationPopupDelaySeconds !== undefined && inputHostedCheckoutVerificationPopupDelaySeconds) {
         inputHostedCheckoutVerificationPopupDelaySeconds.value = String(

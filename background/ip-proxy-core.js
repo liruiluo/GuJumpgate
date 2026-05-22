@@ -2,6 +2,7 @@
 let ipProxyAuthListenerInstalled = false;
 let ipProxyErrorListenerInstalled = false;
 let currentIpProxyAuthEntry = null;
+let currentIpProxyForceDirectAuthEntry = null;
 let ipProxyExitDetectionToken = 0;
 let ipProxyProbeInFlightPromise = null;
 let lastAppliedIpProxyEntrySignature = '';
@@ -2795,25 +2796,30 @@ function installIpProxyAuthListener() {
   chrome.webRequest.onAuthRequired.addListener(
     (details, callback) => {
       try {
-        const auth = currentIpProxyAuthEntry;
+        const isProxyChallenge = details?.isProxy === true;
+        const challengerHost = String(details?.challenger?.host || '').trim().toLowerCase();
+        const challengerPort = Number.parseInt(String(details?.challenger?.port || ''), 10) || 0;
+        const proxyAuthStatus = Number.parseInt(String(details?.statusCode || ''), 10) === 407;
+        const authEntries = [currentIpProxyAuthEntry, currentIpProxyForceDirectAuthEntry]
+          .filter((entry) => entry?.username)
+          .map((entry) => ({
+            ...entry,
+            host: String(entry?.host || '').trim().toLowerCase(),
+            port: Number.parseInt(String(entry?.port || ''), 10) || 0,
+          }));
+        const matchedAuth = authEntries.find((entry) => Boolean(
+          challengerHost
+          && entry.host
+          && challengerHost === entry.host
+          && (!entry.port || !challengerPort || entry.port === challengerPort)
+        )) || null;
+        const auth = matchedAuth || authEntries[0] || null;
         if (!auth?.username) {
           recordIpProxyAuthChallenge(details, false);
           callback();
           return;
         }
-        const isProxyChallenge = details?.isProxy === true;
-        const challengerHost = String(details?.challenger?.host || '').trim().toLowerCase();
-        const challengerPort = Number.parseInt(String(details?.challenger?.port || ''), 10) || 0;
-        const authHost = String(auth?.host || '').trim().toLowerCase();
-        const authPort = Number.parseInt(String(auth?.port || ''), 10) || 0;
-        const challengerMatched = Boolean(
-          challengerHost
-          && authHost
-          && challengerHost === authHost
-          && (!authPort || !challengerPort || authPort === challengerPort)
-        );
-        const proxyAuthStatus = Number.parseInt(String(details?.statusCode || ''), 10) === 407;
-        const shouldProvide = isProxyChallenge || challengerMatched || proxyAuthStatus;
+        const shouldProvide = isProxyChallenge || Boolean(matchedAuth) || proxyAuthStatus;
         recordIpProxyAuthChallenge(details, shouldProvide);
         if (!shouldProvide) {
           callback();
@@ -2923,10 +2929,16 @@ function validateProxyControlAfterApply(details, entry) {
 }
 
 function buildIpProxyPacScript(entry) {
-  const normalizedProtocol = normalizeIpProxyProtocol(entry?.protocol || DEFAULT_IP_PROXY_PROTOCOL);
-  const host = String(entry?.host || '').trim();
-  const port = normalizeIpProxyPort(entry?.port);
-  if (!host || !port) {
+  return buildIpProxyPacScriptWithOptions(entry, {});
+}
+
+function buildIpProxyPacEndpoint(protocol = DEFAULT_IP_PROXY_PROTOCOL, host = '', port = 0) {
+  const normalizedProtocol = String(protocol || '').trim().toLowerCase() === 'socks5h'
+    ? 'socks5'
+    : normalizeIpProxyProtocol(protocol || DEFAULT_IP_PROXY_PROTOCOL);
+  const normalizedHost = String(host || '').trim();
+  const normalizedPort = normalizeIpProxyPort(port);
+  if (!normalizedHost || !normalizedPort) {
     return '';
   }
   let pacScheme = 'PROXY';
@@ -2937,6 +2949,96 @@ function buildIpProxyPacScript(entry) {
   } else if (normalizedProtocol === 'socks5') {
     pacScheme = 'SOCKS5';
   }
+  return `${pacScheme} ${normalizedHost}:${normalizedPort}`;
+}
+
+function parseIpProxyForceDirectProxyUrl(value = '') {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) {
+    return null;
+  }
+  try {
+    const parsed = new URL(rawValue);
+    const protocol = String(parsed.protocol || '').replace(/:$/g, '').trim().toLowerCase();
+    if (!['http', 'https', 'socks4', 'socks5', 'socks5h'].includes(protocol)) {
+      return null;
+    }
+    const host = String(parsed.hostname || '').trim();
+    const port = normalizeIpProxyPort(parsed.port);
+    if (!host || !port) {
+      return null;
+    }
+    return {
+      protocol: protocol === 'socks5h' ? 'socks5' : protocol,
+      host,
+      port,
+      username: parsed.username ? decodeURIComponent(parsed.username) : '',
+      password: parsed.password ? decodeURIComponent(parsed.password) : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveIpProxyForceDirectRouteEntry(state = {}, fallbackEntry = null) {
+  const configuredProxy = parseIpProxyForceDirectProxyUrl(state?.plusCheckoutConversionProxyUrl);
+  if (configuredProxy?.host && configuredProxy?.port) {
+    return configuredProxy;
+  }
+  if (fallbackEntry?.host && normalizeIpProxyPort(fallbackEntry?.port)) {
+    return {
+      protocol: normalizeIpProxyProtocol(fallbackEntry?.protocol || DEFAULT_IP_PROXY_PROTOCOL),
+      host: String(fallbackEntry.host || '').trim(),
+      port: normalizeIpProxyPort(fallbackEntry.port),
+      username: String(fallbackEntry?.username || '').trim(),
+      password: String(fallbackEntry?.password || ''),
+    };
+  }
+  const currentEntry = getIpProxyCurrentEntryFromState(state);
+  if (currentEntry?.host && normalizeIpProxyPort(currentEntry?.port)) {
+    return {
+      protocol: normalizeIpProxyProtocol(currentEntry?.protocol || DEFAULT_IP_PROXY_PROTOCOL),
+      host: String(currentEntry.host || '').trim(),
+      port: normalizeIpProxyPort(currentEntry.port),
+      username: String(currentEntry?.username || '').trim(),
+      password: String(currentEntry?.password || ''),
+    };
+  }
+  return null;
+}
+
+function resolveIpProxyForceDirectFallback(state = {}, fallbackEntry = null) {
+  const routeEntry = resolveIpProxyForceDirectRouteEntry(state, fallbackEntry);
+  if (routeEntry?.host && routeEntry?.port) {
+    return buildIpProxyPacEndpoint(routeEntry.protocol, routeEntry.host, routeEntry.port);
+  }
+  return String(
+    typeof IP_PROXY_FORCE_DIRECT_FALLBACK !== 'undefined' && IP_PROXY_FORCE_DIRECT_FALLBACK
+      ? IP_PROXY_FORCE_DIRECT_FALLBACK
+      : 'DIRECT'
+  ).trim() || 'DIRECT';
+}
+
+function resolveIpProxyForceDirectAuthEntry(state = {}, fallbackEntry = null) {
+  const routeEntry = resolveIpProxyForceDirectRouteEntry(state, fallbackEntry);
+  if (!routeEntry?.username) {
+    return null;
+  }
+  return {
+    host: String(routeEntry.host || '').trim(),
+    port: normalizeIpProxyPort(routeEntry.port),
+    username: String(routeEntry.username || '').trim(),
+    password: String(routeEntry.password || ''),
+  };
+}
+
+function buildIpProxyPacScriptWithOptions(entry, options = {}) {
+  const normalizedProtocol = normalizeIpProxyProtocol(entry?.protocol || DEFAULT_IP_PROXY_PROTOCOL);
+  const host = String(entry?.host || '').trim();
+  const port = normalizeIpProxyPort(entry?.port);
+  if (!host || !port) {
+    return '';
+  }
   const targetPatterns = IP_PROXY_TARGET_HOST_PATTERNS.map((pattern) => `'${String(pattern).replace(/'/g, "\\'")}'`).join(', ');
   const bypassList = IP_PROXY_BYPASS_LIST.map((pattern) => `'${String(pattern).replace(/'/g, "\\'")}'`).join(', ');
   const forceDirectPatterns = (typeof IP_PROXY_FORCE_DIRECT_HOST_PATTERNS !== 'undefined' && Array.isArray(IP_PROXY_FORCE_DIRECT_HOST_PATTERNS)
@@ -2944,12 +3046,9 @@ function buildIpProxyPacScript(entry) {
     : [])
     .map((pattern) => `'${String(pattern).replace(/'/g, "\\'")}'`)
     .join(', ');
-  const forceDirectFallback = String(
-    typeof IP_PROXY_FORCE_DIRECT_FALLBACK !== 'undefined' && IP_PROXY_FORCE_DIRECT_FALLBACK
-      ? IP_PROXY_FORCE_DIRECT_FALLBACK
-      : 'DIRECT'
-  ).replace(/"/g, '\\"');
-  const proxyEndpoint = `${pacScheme} ${host}:${port}`;
+  const forceDirectFallback = String(options?.forceDirectFallback || resolveIpProxyForceDirectFallback({}, null) || 'DIRECT')
+    .replace(/"/g, '\\"');
+  const proxyEndpoint = buildIpProxyPacEndpoint(normalizedProtocol, host, port);
   const routeAllLiteral = (typeof IP_PROXY_ROUTE_ALL_TRAFFIC !== 'undefined' && Boolean(IP_PROXY_ROUTE_ALL_TRAFFIC))
     ? 'true'
     : 'false';
@@ -3028,6 +3127,7 @@ function buildIpProxyEntrySignature(entry = {}) {
 
 async function clearIpProxySettings(options = {}) {
   currentIpProxyAuthEntry = null;
+  currentIpProxyForceDirectAuthEntry = null;
   if (options?.resetAppliedSignature !== false) {
     lastAppliedIpProxyEntrySignature = '';
   }
@@ -3220,7 +3320,11 @@ async function applyIpProxySettingsFromState(state = {}, options = {}) {
     }).catch(() => effectiveEntry);
   }
 
-  const pacScript = buildIpProxyPacScript(effectiveEntry);
+  const forceDirectAuthEntry = resolveIpProxyForceDirectAuthEntry(resolvedState, effectiveEntry);
+  const pacScript = buildIpProxyPacScriptWithOptions(effectiveEntry, {
+    // 优先复用扩展内填写的支付转换代理；未填写时退回当前 IP 代理，避免依赖固定本地端口。
+    forceDirectFallback: resolveIpProxyForceDirectFallback(resolvedState, effectiveEntry),
+  });
   if (!pacScript) {
     await setIpProxyLeakGuardEnabled(true);
     const status = {
@@ -3277,6 +3381,9 @@ async function applyIpProxySettingsFromState(state = {}, options = {}) {
           password: String(effectiveEntry.password || ''),
         }
       : null;
+    currentIpProxyForceDirectAuthEntry = forceDirectAuthEntry
+      ? { ...forceDirectAuthEntry }
+      : null;
     await clearIpProxySettings({
       resetAppliedSignature: false,
       resetHostVariant: false,
@@ -3288,6 +3395,9 @@ async function applyIpProxySettingsFromState(state = {}, options = {}) {
           username: effectiveEntry.username,
           password: String(effectiveEntry.password || ''),
         }
+      : null;
+    currentIpProxyForceDirectAuthEntry = forceDirectAuthEntry
+      ? { ...forceDirectAuthEntry }
       : null;
     if (shouldResetNetworkState) {
       await clearIpProxyNetworkState();

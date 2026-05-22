@@ -477,6 +477,8 @@ const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const DEFAULT_SUB2API_URL = '';
 const DEFAULT_CODEX2API_URL = 'http://localhost:8080/admin/accounts';
 const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
+const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
+const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_PROXY_NAME = '';
 const DEFAULT_SUB2API_ACCOUNT_PRIORITY = 1;
@@ -517,6 +519,7 @@ const IP_PROXY_ACCOUNT_LIST_ENABLED = false;
 const IP_PROXY_INIT_ENABLE_EXIT_PROBE = false;
 const IP_PROXY_INIT_SUPPRESS_AUTH_REBIND = true;
 const IP_PROXY_INIT_AUTO_APPLY = false;
+const LEGACY_IP_PROXY_FEATURE_ENABLED = false;
 const IP_PROXY_TARGET_HOST_PATTERNS = [
   'openai.com',
   '*.openai.com',
@@ -985,6 +988,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
   plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,
   plusHostedCheckoutOauthDelaySeconds: 10,
+  plusCheckoutCloudConversionEnabled: false,
+  plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
+  plusCheckoutCloudConversionApiKey: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY,
   plusCheckoutConversionProxyUrl: '',
   hostedCheckoutVerificationPopupDelaySeconds: 20,
   hostedCheckoutVerificationUrl: '',
@@ -2976,6 +2982,22 @@ function normalizePersistentSettingValue(key, value) {
         value,
         PERSISTED_SETTING_DEFAULTS.plusHostedCheckoutOauthDelaySeconds
       );
+    case 'plusCheckoutCloudConversionEnabled':
+      return Boolean(value);
+    case 'plusCheckoutCloudConversionApiUrl':
+      try {
+        const rawValue = String(value || '').trim();
+        if (!rawValue) {
+          return '';
+        }
+        const parsed = new URL(rawValue);
+        parsed.hash = '';
+        return parsed.toString();
+      } catch {
+        return String(value || '').trim();
+      }
+    case 'plusCheckoutCloudConversionApiKey':
+      return String(value || '').trim();
     case 'plusCheckoutConversionProxyUrl': {
       const rawValue = String(value || '').trim();
       if (!rawValue) {
@@ -11936,6 +11958,10 @@ async function clearIpProxyAutoSyncAlarm() {
 }
 
 async function ensureIpProxyAutoSyncAlarm(stateOverride = null) {
+  if (!LEGACY_IP_PROXY_FEATURE_ENABLED) {
+    await clearIpProxyAutoSyncAlarm();
+    return false;
+  }
   const state = stateOverride || await getState();
   const enabled = Boolean(state?.ipProxyAutoSyncEnabled);
   if (!enabled) {
@@ -11959,6 +11985,10 @@ async function ensureIpProxyAutoSyncAlarm(stateOverride = null) {
 }
 
 async function runIpProxyAutoSync(trigger = 'alarm') {
+  if (!LEGACY_IP_PROXY_FEATURE_ENABLED) {
+    await clearIpProxyAutoSyncAlarm();
+    return { skipped: true, reason: 'feature_disabled' };
+  }
   if (ipProxyAutoSyncRunning) {
     return { skipped: true, reason: 'running' };
   }
@@ -12003,7 +12033,67 @@ async function runIpProxyAutoSync(trigger = 'alarm') {
   }
 }
 
+async function disableLegacyIpProxyFeatureRuntime() {
+  if (typeof clearIpProxyAutoSyncAlarm === 'function') {
+    await clearIpProxyAutoSyncAlarm().catch(() => {});
+  }
+  if (typeof clearIpProxySettings === 'function') {
+    await clearIpProxySettings({ resetLastAppliedAuthSnapshot: true }).catch(() => {});
+  }
+  if (typeof setIpProxyLeakGuardEnabled === 'function') {
+    await setIpProxyLeakGuardEnabled(false).catch(() => {});
+  }
+
+  const state = await getState().catch(() => ({}));
+  const patch = {
+    ipProxyEnabled: false,
+    ipProxyAutoSyncEnabled: false,
+    ipProxyApplied: false,
+    ipProxyAppliedReason: 'feature_removed',
+    ipProxyAppliedAt: 0,
+    ipProxyAppliedHost: '',
+    ipProxyAppliedPort: 0,
+    ipProxyAppliedRegion: '',
+    ipProxyAppliedHasAuth: false,
+    ipProxyAppliedProvider: '',
+    ipProxyAppliedError: '',
+    ipProxyAppliedWarning: '',
+    ipProxyAppliedExitIp: '',
+    ipProxyAppliedExitRegion: '',
+    ipProxyAppliedExitDetecting: false,
+    ipProxyAppliedExitError: '',
+    ipProxyAppliedExitSource: '',
+    ipProxyAppliedExitEndpoint: '',
+    ipProxyPool: [],
+    ipProxyCurrentIndex: 0,
+    ipProxyCurrent: null,
+    ipProxyApiPool: [],
+    ipProxyApiCurrentIndex: 0,
+    ipProxyApiCurrent: null,
+    ipProxyAccountPool: [],
+    ipProxyAccountCurrentIndex: 0,
+    ipProxyAccountCurrent: null,
+    ipProxyExitRegion: '',
+  };
+  const shouldUpdateRuntime = Object.keys(patch).some((key) => {
+    const nextValue = patch[key];
+    const currentValue = state?.[key];
+    return JSON.stringify(currentValue) !== JSON.stringify(nextValue);
+  });
+  if (shouldUpdateRuntime) {
+    await setState(patch).catch(() => {});
+    broadcastDataUpdate(patch);
+  }
+  await setPersistentSettings({
+    ipProxyEnabled: false,
+    ipProxyAutoSyncEnabled: false,
+  }).catch(() => {});
+}
+
 async function maybeSwitchIpProxyAfterAutoRunRoundSuccess(payload = {}) {
+  if (!LEGACY_IP_PROXY_FEATURE_ENABLED) {
+    return null;
+  }
   if (typeof switchIpProxy !== 'function') {
     return null;
   }
@@ -12252,7 +12342,9 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   isStopError,
   launchAutoRunTimerPlan,
   normalizeAutoRunFallbackThreadIntervalMinutes,
-  onAutoRunRoundSuccess: (payload = {}) => maybeSwitchIpProxyAfterAutoRunRoundSuccess(payload),
+  onAutoRunRoundSuccess: LEGACY_IP_PROXY_FEATURE_ENABLED
+    ? ((payload = {}) => maybeSwitchIpProxyAfterAutoRunRoundSuccess(payload))
+    : null,
   persistAutoRunTimerPlan,
   resetState,
   runAutoSequenceFromNode: (...args) => runAutoSequenceFromNode(...args),
@@ -13493,7 +13585,7 @@ const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?
   throwIfStopped,
   waitForTabCompleteUntilStopped,
   waitForTabUrlMatchUntilStopped,
-  probeIpProxyExit,
+  probeIpProxyExit: null,
 });
 const goPayManualConfirmExecutor = self.MultiPageBackgroundGoPayManualConfirm?.createGoPayManualConfirmExecutor({
   addLog,
@@ -13674,7 +13766,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   buildLuckmailSessionSettingsPayload,
   buildPersistentSettingsPayload,
   broadcastDataUpdate,
-  applyIpProxySettingsFromState,
+  applyIpProxySettingsFromState: null,
   cancelScheduledAutoRun,
   checkIcloudSession,
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
@@ -13704,6 +13796,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   }),
   exportSettingsBundle,
   fetchHostedCheckoutVerificationCodeManually: (...args) => plusCheckoutCreateExecutor.fetchHostedCheckoutVerificationCodeManually(...args),
+  testCheckoutConversionProxy: (...args) => plusCheckoutCreateExecutor.testCheckoutConversionProxy(...args),
   fetchGeneratedEmail,
   refreshGpcCardBalance,
   finalizePhoneActivationAfterSuccessfulFlow,
@@ -13747,9 +13840,9 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   isStopError,
   isTabAlive,
   launchAutoRunTimerPlan,
-  ensureIpProxyAutoSyncAlarm,
-  clearIpProxyAutoSyncAlarm,
-  runIpProxyAutoSync,
+  ensureIpProxyAutoSyncAlarm: null,
+  clearIpProxyAutoSyncAlarm: null,
+  runIpProxyAutoSync: null,
   listIcloudAliases,
   listLuckmailPurchasesForManagement,
   markCurrentCustomEmailPoolEntryUsed,
@@ -13766,13 +13859,13 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   patchMail2925Account,
   registerTab,
   requestStop,
-  probeIpProxyExit,
+  probeIpProxyExit: null,
   resetState,
   resumeAutoRun,
   scheduleAutoRun,
   selectLuckmailPurchase,
-  switchIpProxy,
-  changeIpProxyExit,
+  switchIpProxy: null,
+  changeIpProxyExit: null,
   setCurrentPayPalAccount,
   setCurrentHotmailAccount,
   setCurrentMail2925Account,
@@ -15518,7 +15611,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     });
     return;
   }
-  if (alarm.name === IP_PROXY_AUTO_SYNC_ALARM_NAME) {
+  if (LEGACY_IP_PROXY_FEATURE_ENABLED && alarm.name === IP_PROXY_AUTO_SYNC_ALARM_NAME) {
     runIpProxyAutoSync('alarm').catch((err) => {
       console.error(LOG_PREFIX, 'Failed to run IP proxy auto sync alarm:', err);
     });
@@ -15535,15 +15628,8 @@ chrome.runtime.onStartup.addListener(() => {
   restoreAutoRunTimerIfNeeded().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to restore auto run timer on startup:', err);
   });
-  restoreIpProxySettingsOnWorkerStart({
-    autoApply: IP_PROXY_INIT_AUTO_APPLY,
-    skipExitProbe: !IP_PROXY_INIT_ENABLE_EXIT_PROBE,
-    suppressAuthRebind: IP_PROXY_INIT_SUPPRESS_AUTH_REBIND,
-  }).catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy settings on startup:', err);
-  });
-  ensureIpProxyAutoSyncAlarm().catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm on startup:', err);
+  disableLegacyIpProxyFeatureRuntime().catch((err) => {
+    console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature on startup:', err);
   });
 });
 
@@ -15551,28 +15637,14 @@ chrome.runtime.onInstalled.addListener(() => {
   restoreAutoRunTimerIfNeeded().catch((err) => {
     console.error(LOG_PREFIX, 'Failed to restore auto run timer on install/update:', err);
   });
-  restoreIpProxySettingsOnWorkerStart({
-    autoApply: IP_PROXY_INIT_AUTO_APPLY,
-    skipExitProbe: !IP_PROXY_INIT_ENABLE_EXIT_PROBE,
-    suppressAuthRebind: IP_PROXY_INIT_SUPPRESS_AUTH_REBIND,
-  }).catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy settings on install/update:', err);
-  });
-  ensureIpProxyAutoSyncAlarm().catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm on install/update:', err);
+  disableLegacyIpProxyFeatureRuntime().catch((err) => {
+    console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature on install/update:', err);
   });
 });
 
 restoreAutoRunTimerIfNeeded().catch((err) => {
   console.error(LOG_PREFIX, 'Failed to restore auto run timer:', err);
 });
-restoreIpProxySettingsOnWorkerStart({
-  autoApply: IP_PROXY_INIT_AUTO_APPLY,
-  skipExitProbe: !IP_PROXY_INIT_ENABLE_EXIT_PROBE,
-  suppressAuthRebind: IP_PROXY_INIT_SUPPRESS_AUTH_REBIND,
-}).catch((err) => {
-  console.error(LOG_PREFIX, 'Failed to restore IP proxy settings:', err);
-});
-ensureIpProxyAutoSyncAlarm().catch((err) => {
-  console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm:', err);
+disableLegacyIpProxyFeatureRuntime().catch((err) => {
+  console.error(LOG_PREFIX, 'Failed to disable legacy IP proxy feature:', err);
 });

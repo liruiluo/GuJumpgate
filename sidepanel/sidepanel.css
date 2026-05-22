@@ -1148,9 +1148,32 @@ header {
   min-width: 0;
 }
 
+.plus-checkout-conversion-proxy-test-inline {
+  flex: 1;
+  min-width: 0;
+}
+
 .hosted-checkout-manual-fetch-code {
   margin-left: auto;
   text-align: right;
+}
+
+.plus-checkout-conversion-proxy-test-result {
+  margin-left: auto;
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+.plus-checkout-conversion-proxy-test-result.status-running {
+  color: var(--blue);
+}
+
+.plus-checkout-conversion-proxy-test-result.status-success {
+  color: var(--green);
+}
+
+.plus-checkout-conversion-proxy-test-result.status-error {
+  color: var(--red);
 }
 
 .input-with-icon {

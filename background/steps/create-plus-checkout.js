@@ -10,6 +10,8 @@
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
   const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
   const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
+  const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
+  const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY = '2KwVxE6f0ABH002JLkoQJ9ReRf4_d01y';
   const GPC_HELPER_PHONE_MODE_AUTO = 'auto';
   const GPC_HELPER_PHONE_MODE_MANUAL = 'manual';
   const CHECKOUT_READY_URL_PATTERN = /^https:\/\/(?:chatgpt\.com\/checkout|pay\.openai\.com\/c\/pay|checkout\.stripe\.com\/c\/pay)(?:\/|$)/i;
@@ -40,6 +42,21 @@
     '*.oaistatic.com',
     'stripe.com',
     '*.stripe.com',
+  ];
+  const CHECKOUT_CONVERSION_PROXY_TEST_PROBE_ENDPOINTS = [
+    'http://ip-api.com/json?lang=en',
+    'https://ipinfo.io/json',
+    'https://chatgpt.com/cdn-cgi/trace',
+  ];
+  const CHECKOUT_CONVERSION_PROXY_TEST_TARGET_ENDPOINTS = [
+    'https://chatgpt.com/',
+  ];
+  const CHECKOUT_CONVERSION_PROXY_TEST_TARGET_HOST_PATTERNS = [
+    ...CHECKOUT_CONVERSION_PROXY_TARGET_HOST_PATTERNS,
+    'ip-api.com',
+    '*.ip-api.com',
+    'ipinfo.io',
+    '*.ipinfo.io',
   ];
 
   function createPlusCheckoutCreateExecutor(deps = {}) {
@@ -163,6 +180,41 @@
       return String(value || '').trim();
     }
 
+    function normalizePlusCheckoutCloudConversionApiUrl(value = '') {
+      const rawValue = String(value || '').trim();
+      if (!rawValue) {
+        return '';
+      }
+      try {
+        const parsed = new URL(rawValue);
+        parsed.hash = '';
+        return parsed.toString();
+      } catch {
+        return rawValue;
+      }
+    }
+
+    function isPlusCheckoutCloudConversionEnabled(state = {}, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      return normalizePlusPaymentMethod(paymentMethod) === PLUS_PAYMENT_METHOD_PAYPAL
+        && Boolean(state?.plusCheckoutCloudConversionEnabled);
+    }
+
+    function getCheckoutBillingDetailsForPaymentMethod(paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      return normalizePlusPaymentMethod(paymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
+        ? { country: 'ID', currency: 'IDR' }
+        : { country: 'US', currency: 'USD' };
+    }
+
+    function formatCloudCheckoutErrorDetail(value, fallback = '') {
+      if (typeof value === 'string') {
+        return value.trim() || fallback;
+      }
+      if (value && typeof value === 'object') {
+        return String(value.message || value.detail || value.error || JSON.stringify(value)).trim() || fallback;
+      }
+      return String(value ?? fallback).trim() || fallback;
+    }
+
     function normalizeCheckoutConversionProxyProtocol(value = '') {
       const normalized = String(value || '').trim().toLowerCase();
       if (normalized === 'socks5h') {
@@ -232,7 +284,7 @@
         pacScheme = 'HTTPS';
       } else if (entry.protocol === 'socks4') {
         pacScheme = 'SOCKS4';
-      } else if (entry.protocol === 'socks5') {
+      } else if (entry.protocol === 'socks5' || entry.protocol === 'socks5h') {
         pacScheme = 'SOCKS5';
       }
       const targetPatterns = (
@@ -277,6 +329,56 @@ function FindProxyForURL(url, host) {
   }
   return "DIRECT";
 }`.trim();
+    }
+
+    function buildCheckoutConversionFixedProxyConfig(entry = null) {
+      if (!entry?.host || !entry?.port) {
+        return null;
+      }
+      const scheme = String(entry.protocol || '').trim().toLowerCase();
+      return {
+        mode: 'fixed_servers',
+        rules: {
+          singleProxy: {
+            scheme: scheme === 'socks5h' ? 'socks5' : scheme,
+            host: entry.host,
+            port: entry.port,
+          },
+          bypassList: CHECKOUT_CONVERSION_PROXY_BYPASS_LIST.slice(),
+        },
+      };
+    }
+
+    function validateCheckoutProxyControlAfterApply(details = {}, entry = null) {
+      const level = String(details?.levelOfControl || '').trim();
+      if (level && level !== 'controlled_by_this_extension') {
+        return {
+          ok: false,
+          message: `代理控制权不在当前扩展（levelOfControl=${level || 'unknown'}）`,
+        };
+      }
+
+      const mode = String(details?.value?.mode || '').trim().toLowerCase();
+      if (mode !== 'fixed_servers') {
+        return {
+          ok: false,
+          message: `代理模式不是 fixed_servers（当前为 ${mode || 'unknown'}）`,
+        };
+      }
+
+      const singleProxy = details?.value?.rules?.singleProxy || null;
+      const appliedHost = String(singleProxy?.host || '').trim().toLowerCase();
+      const appliedPort = Number.parseInt(String(singleProxy?.port || ''), 10) || 0;
+      const expectedHost = String(entry?.host || '').trim().toLowerCase();
+      const expectedPort = Number.parseInt(String(entry?.port || ''), 10) || 0;
+      if (!appliedHost || !appliedPort || appliedHost !== expectedHost || appliedPort !== expectedPort) {
+        return {
+          ok: false,
+          message: `fixed_servers 未绑定到当前代理节点 ${expectedHost}:${expectedPort}，疑似被其他代理配置覆盖`,
+        };
+      }
+
+      return { ok: true };
     }
 
     function getCheckoutProxySettings(details = { incognito: false }) {
@@ -345,9 +447,9 @@ function FindProxyForURL(url, host) {
       const previousAuthEntry = typeof currentIpProxyAuthEntry === 'undefined'
         ? null
         : (currentIpProxyAuthEntry ? { ...currentIpProxyAuthEntry } : null);
-      const pacScript = buildCheckoutConversionProxyPacScript(entry, options);
-      if (!pacScript) {
-        throw new Error('支付转换代理配置不完整，无法生成 PAC 规则。');
+      const fixedProxyConfig = buildCheckoutConversionFixedProxyConfig(entry);
+      if (!fixedProxyConfig) {
+        throw new Error('支付转换代理配置不完整，无法生成 fixed_servers 规则。');
       }
 
       try {
@@ -367,19 +469,11 @@ function FindProxyForURL(url, host) {
               }
             : null;
         }
-        await setCheckoutProxySettings({
-          mode: 'pac_script',
-          pacScript: {
-            data: pacScript,
-            mandatory: true,
-          },
-        });
-        if (typeof validateProxyControlAfterApply === 'function') {
-          const appliedSettings = await getCheckoutProxySettings({ incognito: false }).catch(() => null);
-          const takeoverCheck = validateProxyControlAfterApply(appliedSettings || {}, entry);
-          if (!takeoverCheck?.ok) {
-            throw new Error(takeoverCheck.message || '支付转换代理接管校验失败。');
-          }
+        await setCheckoutProxySettings(fixedProxyConfig);
+        const appliedSettings = await getCheckoutProxySettings({ incognito: false }).catch(() => null);
+        const takeoverCheck = validateCheckoutProxyControlAfterApply(appliedSettings || {}, entry);
+        if (!takeoverCheck?.ok) {
+          throw new Error(takeoverCheck.message || '支付转换代理接管校验失败。');
         }
       } catch (error) {
         if (typeof currentIpProxyAuthEntry !== 'undefined') {
@@ -422,8 +516,128 @@ function FindProxyForURL(url, host) {
       await clearCheckoutProxySettings();
     }
 
+    function summarizeCheckoutConversionProxyDiagnostics(items = [], maxItems = 3) {
+      const normalizedItems = Array.isArray(items)
+        ? Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
+        : [];
+      if (!normalizedItems.length) {
+        return '';
+      }
+      if (typeof buildProbeDiagnosticsSummary === 'function') {
+        return buildProbeDiagnosticsSummary(normalizedItems, maxItems);
+      }
+      return normalizedItems.slice(0, Math.max(1, Number(maxItems) || 3)).join(' | ');
+    }
+
+    async function testCheckoutConversionProxy(options = {}) {
+      const proxyUrl = normalizeCheckoutConversionProxyUrl(options?.proxyUrl);
+      if (!proxyUrl) {
+        throw new Error('请先填写支付转换代理地址。');
+      }
+
+      const parsedEntry = parseCheckoutConversionProxyUrl(proxyUrl);
+      const applyProxy = typeof applyCheckoutScopedProxyFromUrl === 'function'
+        ? applyCheckoutScopedProxyFromUrl
+        : defaultApplyCheckoutScopedProxyFromUrl;
+      const restoreProxy = typeof restoreCheckoutScopedProxySnapshot === 'function'
+        ? restoreCheckoutScopedProxySnapshot
+        : defaultRestoreCheckoutScopedProxySnapshot;
+      const probeDiagnostics = [];
+      const targetDiagnostics = [];
+      let snapshot = null;
+
+      try {
+        snapshot = await applyProxy(proxyUrl, {
+          targetHostPatterns: CHECKOUT_CONVERSION_PROXY_TEST_TARGET_HOST_PATTERNS,
+        });
+
+        let exit = null;
+        if (typeof detectProxyExitInfoByPageContext === 'function') {
+          exit = await detectProxyExitInfoByPageContext({
+            timeoutMs: 12000,
+            errors: probeDiagnostics,
+            probeEndpoints: CHECKOUT_CONVERSION_PROXY_TEST_PROBE_ENDPOINTS,
+          }).catch((error) => {
+            probeDiagnostics.push(`probe:page_context:${error?.message || error}`);
+            return { ip: '', region: '', source: 'page_context_unavailable', endpoint: '' };
+          });
+        }
+        if (!exit?.ip && typeof detectProxyExitInfoByBackgroundFetch === 'function') {
+          exit = await detectProxyExitInfoByBackgroundFetch({
+            timeoutMs: 12000,
+            errors: probeDiagnostics,
+            probeEndpoints: CHECKOUT_CONVERSION_PROXY_TEST_PROBE_ENDPOINTS,
+          }).catch((error) => {
+            probeDiagnostics.push(`probe:background:${error?.message || error}`);
+            return exit || { ip: '', region: '', source: 'background_unavailable', endpoint: '' };
+          });
+        }
+
+        const exitIp = String(exit?.ip || '').trim();
+        const exitRegion = String(exit?.region || '').trim();
+        if (!exitIp) {
+          const diagnostics = summarizeCheckoutConversionProxyDiagnostics(probeDiagnostics, 4);
+          throw new Error(diagnostics
+            ? `未检测到代理出口 IP。诊断：${diagnostics}`
+            : '未检测到代理出口 IP。');
+        }
+
+        let reachability = { reachable: true, skipped: true, endpoint: '', source: '' };
+        if (typeof detectIpProxyTargetReachabilityByPageContext === 'function') {
+          reachability = await detectIpProxyTargetReachabilityByPageContext({
+            timeoutMs: 12000,
+            errors: targetDiagnostics,
+            targetReachabilityEndpoints: CHECKOUT_CONVERSION_PROXY_TEST_TARGET_ENDPOINTS,
+          }).catch((error) => {
+            targetDiagnostics.push(`target:${error?.message || error}`);
+            return {
+              reachable: false,
+              endpoint: CHECKOUT_CONVERSION_PROXY_TEST_TARGET_ENDPOINTS[0],
+              source: 'target_page_context',
+              error: error?.message || String(error || '目标站点连通性检测失败'),
+            };
+          });
+        }
+
+        if (reachability?.reachable === false && reachability?.skipped !== true) {
+          const failureMessage = typeof buildTargetReachabilityFailureMessage === 'function'
+            ? buildTargetReachabilityFailureMessage({
+              exitIp,
+              exitRegion,
+            }, reachability)
+            : `已检测到出口 IP ${exitIp}${exitRegion ? ` [${exitRegion}]` : ''}，但 chatgpt.com 不可达。`;
+          throw new Error(failureMessage);
+        }
+
+        return {
+          ok: true,
+          proxyDisplayName: describeCheckoutConversionProxyEntry(parsedEntry),
+          exitIp,
+          exitRegion,
+          exitSource: String(exit?.source || '').trim(),
+          exitEndpoint: String(exit?.endpoint || '').trim(),
+          targetEndpoint: String(reachability?.endpoint || CHECKOUT_CONVERSION_PROXY_TEST_TARGET_ENDPOINTS[0] || '').trim(),
+          diagnostics: summarizeCheckoutConversionProxyDiagnostics([
+            ...probeDiagnostics,
+            ...targetDiagnostics,
+          ], 4),
+        };
+      } finally {
+        if (snapshot?.applied) {
+          await restoreProxy(snapshot).catch(() => {});
+        }
+      }
+    }
+
     async function maybeApplyCheckoutConversionProxy(state = {}, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
       if (normalizePlusPaymentMethod(paymentMethod) !== PLUS_PAYMENT_METHOD_PAYPAL) {
+        return null;
+      }
+      if (isPlusCheckoutCloudConversionEnabled(state, paymentMethod)) {
+        const proxyUrl = normalizeCheckoutConversionProxyUrl(state?.plusCheckoutConversionProxyUrl);
+        if (proxyUrl) {
+          await addLog('步骤 6：已启用云端支付转换，本地支付转换代理配置已忽略。', 'info');
+        }
         return null;
       }
       const proxyUrl = normalizeCheckoutConversionProxyUrl(state?.plusCheckoutConversionProxyUrl);
@@ -1637,6 +1851,79 @@ function FindProxyForURL(url, host) {
       return String(sessionResult?.accessToken || sessionResult?.session?.accessToken || '').trim();
     }
 
+    async function generateCloudCheckoutFromApi(accessToken = '', paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL, state = {}) {
+      const token = String(accessToken || '').trim();
+      if (!token) {
+        throw new Error('步骤 6：云端支付转换缺少 accessToken。');
+      }
+
+      const apiUrl = normalizePlusCheckoutCloudConversionApiUrl(
+        state?.plusCheckoutCloudConversionApiUrl || BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL
+      );
+      if (!apiUrl) {
+        throw new Error('步骤 6：已启用云端支付转换，但未配置云端服务地址。');
+      }
+      try {
+        const parsed = new URL(apiUrl);
+        if (!/^https?:$/i.test(String(parsed.protocol || ''))) {
+          throw new Error('unsupported protocol');
+        }
+      } catch {
+        throw new Error('步骤 6：云端支付转换服务地址不是有效的 HTTP/HTTPS URL。');
+      }
+
+      const billingDetails = getCheckoutBillingDetailsForPaymentMethod(paymentMethod);
+      const headers = {
+        Accept: 'application/json',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Content-Type': 'application/json',
+      };
+      const apiKey = String(state?.plusCheckoutCloudConversionApiKey || BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_KEY).trim();
+      if (apiKey) {
+        headers['X-API-Key'] = apiKey;
+      }
+
+      const { response, data } = await fetchJsonWithTimeout(apiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          accessToken: token,
+          paymentMethod: normalizePlusPaymentMethod(paymentMethod),
+          country: billingDetails.country,
+          currency: billingDetails.currency,
+        }),
+      }, 45000);
+
+      const targetCheckoutUrl = String(
+        data?.preferredCheckoutUrl
+        || data?.hostedCheckoutUrl
+        || data?.convertedCheckoutUrl
+        || data?.chatgptCheckoutUrl
+        || data?.checkoutUrl
+        || ''
+      ).trim();
+      if (!response?.ok || !targetCheckoutUrl) {
+        const detail = formatCloudCheckoutErrorDetail(
+          data?.detail || data?.message || data?.error,
+          `HTTP ${response?.status || 0}`
+        );
+        throw new Error(`步骤 6：云端支付转换失败：${detail}`);
+      }
+
+      return {
+        checkoutUrl: String(data?.checkoutUrl || '').trim(),
+        chatgptCheckoutUrl: String(data?.chatgptCheckoutUrl || '').trim(),
+        checkoutSessionId: String(data?.checkoutSessionId || '').trim(),
+        processorEntity: String(data?.processorEntity || '').trim(),
+        hostedCheckoutUrl: String(data?.hostedCheckoutUrl || '').trim(),
+        convertedCheckoutUrl: String(data?.chatgptCheckoutUrl || data?.convertedCheckoutUrl || '').trim(),
+        preferredCheckoutUrl: targetCheckoutUrl,
+        country: String(data?.country || billingDetails.country).trim() || billingDetails.country,
+        currency: String(data?.currency || billingDetails.currency).trim() || billingDetails.currency,
+        checkoutSource: 'cloud-converted-checkout',
+      };
+    }
+
     async function generateGpcCheckoutFromApi(accessToken = '', state = {}) {
       const token = String(accessToken || '').trim();
       if (!token) {
@@ -1780,20 +2067,31 @@ function FindProxyForURL(url, host) {
           logMessage: '步骤 6：正在等待 ChatGPT 页面完成加载，再继续创建订阅页...',
         });
 
-        await addLog(
-          paymentMethod === PLUS_PAYMENT_METHOD_PAYPAL
-            ? '步骤 6：正在由扩展内部直连生成美国 US Stripe/外部支付链接...'
-            : `步骤 6：正在由扩展内部创建${checkoutModeLabel}...`,
-          'info'
-        );
-        const result = await sendTabMessageUntilStopped(tabId, PLUS_CHECKOUT_SOURCE, {
-          type: 'CREATE_PLUS_CHECKOUT',
-          source: 'background',
-          payload: { paymentMethod },
-        });
+        const useCloudCheckoutConversion = isPlusCheckoutCloudConversionEnabled(state, paymentMethod);
+        let result = null;
+        if (useCloudCheckoutConversion) {
+          await addLog('步骤 6：已启用云端支付转换，正在读取 accessToken 并请求云端服务生成订阅链接...', 'info');
+          const accessToken = await readAccessTokenFromChatGptSessionTab(tabId);
+          if (!accessToken) {
+            throw new Error('步骤 6：云端支付转换未获取到可用 accessToken。');
+          }
+          result = await generateCloudCheckoutFromApi(accessToken, paymentMethod, state);
+        } else {
+          await addLog(
+            paymentMethod === PLUS_PAYMENT_METHOD_PAYPAL
+              ? '步骤 6：正在由扩展内部直连生成美国 US Stripe/外部支付链接...'
+              : `步骤 6：正在由扩展内部创建${checkoutModeLabel}...`,
+            'info'
+          );
+          result = await sendTabMessageUntilStopped(tabId, PLUS_CHECKOUT_SOURCE, {
+            type: 'CREATE_PLUS_CHECKOUT',
+            source: 'background',
+            payload: { paymentMethod },
+          });
 
-        if (result?.error) {
-          throw new Error(result.error);
+          if (result?.error) {
+            throw new Error(result.error);
+          }
         }
         const targetCheckoutUrl = String(
           result?.preferredCheckoutUrl
@@ -1874,6 +2172,7 @@ function FindProxyForURL(url, host) {
     return {
       executePlusCheckoutCreate,
       fetchHostedCheckoutVerificationCodeManually,
+      testCheckoutConversionProxy,
     };
   }
 

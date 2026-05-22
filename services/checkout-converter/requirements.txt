@@ -1,0 +1,4 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+gunicorn==23.0.0
+curl_cffi>=0.14.0

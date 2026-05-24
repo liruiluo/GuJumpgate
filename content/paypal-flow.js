@@ -320,13 +320,14 @@ function hasHostedVerificationInputs() {
 }
 
 function getHostedVerificationErrorText() {
+  const errorPattern = /check\s+the\s+code\s+and\s+try\s+again|(?:sorry,\s*)?something\s+went\s+wrong\.?\s*get\s+a\s+new\s+code|get\s+a\s+new\s+code/i;
   const alert = document.getElementById('message_ciBasic')
-    || getVisibleControls('[role="alert"]').find((node) => /check\s+the\s+code\s+and\s+try\s+again/i.test(normalizeText(node.textContent || '')));
+    || getVisibleControls('[role="alert"]').find((node) => errorPattern.test(normalizeText(node.textContent || '')));
   return alert && isVisibleElement(alert) ? normalizeText(alert.textContent || '') : '';
 }
 
 function hasHostedInvalidVerificationCodeError() {
-  return /check\s+the\s+code\s+and\s+try\s+again/i.test(getHostedVerificationErrorText());
+  return /check\s+the\s+code\s+and\s+try\s+again|(?:sorry,\s*)?something\s+went\s+wrong\.?\s*get\s+a\s+new\s+code|get\s+a\s+new\s+code/i.test(getHostedVerificationErrorText());
 }
 
 function findHostedVerificationResendButton() {
@@ -356,11 +357,11 @@ function detectPayPalHostedCheckoutStage() {
   if (!/paypal\./i.test(String(location?.host || ''))) {
     return PAYPAL_HOSTED_STAGE_OUTSIDE;
   }
-  if (isPayPalHostedGenericErrorPage()) {
-    return PAYPAL_HOSTED_STAGE_GENERIC_ERROR;
-  }
   if (hasHostedVerificationInputs()) {
     return PAYPAL_HOSTED_STAGE_VERIFICATION;
+  }
+  if (isPayPalHostedGenericErrorPage()) {
+    return PAYPAL_HOSTED_STAGE_GENERIC_ERROR;
   }
   if (isPayPalHostedAccountCreateEmailPage()) {
     return PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL;

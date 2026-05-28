@@ -14,6 +14,9 @@ const PLUS_CHECKOUT_PAYLOAD_BASE = {
   },
 };
 const PAYPAL_DIAGNOSTIC_LOG_INTERVAL_MS = 5000;
+const PLUS_CHECKOUT_DOCUMENT_COMPLETE_TIMEOUT_MS = 30000;
+const HOSTED_CHECKOUT_CARD_FALLBACK_ERROR_PREFIX = 'HOSTED_CHECKOUT_CARD_FALLBACK::';
+const HOSTED_CHECKOUT_CARD_DECLINED_ERROR_PREFIX = 'HOSTED_CHECKOUT_CARD_DECLINED::';
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const DEFAULT_CONVERTED_CHECKOUT_PROCESSOR_ENTITY = 'openai_llc';
@@ -133,6 +136,7 @@ async function waitForDocumentComplete() {
   await waitUntil(() => document.readyState === 'complete', {
     label: '页面加载完成',
     intervalMs: 200,
+    timeoutMs: PLUS_CHECKOUT_DOCUMENT_COMPLETE_TIMEOUT_MS,
   });
   await sleep(1000);
 }
@@ -260,6 +264,83 @@ function findHostedOpenAiPayPalButton() {
     || document.querySelector('.paypal-accordion-item button');
 }
 
+function hasHostedOpenAiPaypalDisabledSignals() {
+  const frames = Array.from(document.querySelectorAll('iframe'));
+  return frames.some((frame) => {
+    const src = String(frame?.getAttribute?.('src') || frame?.src || '');
+    return src.includes('paymentMethods][paypal]=never')
+      || src.includes('wallets][paypal]=never');
+  });
+}
+
+function isHostedOpenAiCardAccordionSelected() {
+  const selectors = [
+    '[data-testid="card-accordion-item"]',
+    '.card-accordion-item',
+    '[data-testid="card-accordion-item-button"]',
+  ];
+  return selectors.some((selector) => Array.from(document.querySelectorAll(selector)).some((el) => {
+    if (!isVisibleElement(el) && !el.closest?.('[data-testid="card-accordion-item"]')) {
+      return false;
+    }
+    const text = getCombinedSearchText(el);
+    const className = String(el.className || el.getAttribute?.('class') || '');
+    const current = el.getAttribute?.('aria-current');
+    return /card|银行卡|卡号|cvc|expiry|有效期/i.test(text)
+      || /\bselected\b/i.test(className)
+      || current === 'true'
+      || current === 'page'
+      || hasPaymentMethodSelectionMarker(el);
+  }));
+}
+
+function getHostedOpenAiCardFallbackState() {
+  if (!isHostedOpenAiCheckoutPage()) {
+    return {
+      fallback: false,
+      reason: '',
+      reasons: [],
+    };
+  }
+
+  const hasPayPalButton = Boolean(findHostedOpenAiPayPalButton());
+  const hasPayPalTarget = Boolean(findPayPalPaymentMethodTarget());
+  const hasGoPayTarget = Boolean(findGoPayPaymentMethodTarget());
+  const cardFieldsVisible = hasCreditCardFields();
+  const cardAccordionSelected = isHostedOpenAiCardAccordionSelected();
+  const paypalDisabledSignals = hasHostedOpenAiPaypalDisabledSignals();
+  const paymentTextPreview = getPaymentTextPreview(12);
+  const cardPreview = paymentTextPreview.find((text) => /银行卡|card|cardholder|cvc|expiry|有效期|security/i.test(text)) || '';
+  const reasons = [];
+
+  if (!hasPayPalButton) reasons.push('未找到 PayPal 按钮');
+  if (!hasPayPalTarget) reasons.push('未识别到 PayPal 付款方式');
+  if (!hasGoPayTarget) reasons.push('未识别到 GoPay 付款方式');
+  if (cardFieldsVisible) reasons.push('银行卡字段可见');
+  if (cardAccordionSelected) reasons.push('银行卡卡片已选中');
+  if (paypalDisabledSignals) reasons.push('页面信号显示 paypal=never');
+  if (cardPreview) reasons.push(`支付文案包含“${cardPreview.slice(0, 40)}”`);
+
+  const fallback = !hasPayPalButton
+    && !hasPayPalTarget
+    && !hasGoPayTarget
+    && cardFieldsVisible
+    && (cardAccordionSelected || paypalDisabledSignals || Boolean(cardPreview));
+
+  return {
+    fallback,
+    reason: reasons.join('；'),
+    reasons,
+    hasPayPalButton,
+    hasPayPalTarget,
+    hasGoPayTarget,
+    cardFieldsVisible,
+    cardAccordionSelected,
+    paypalDisabledSignals,
+    cardPreview,
+  };
+}
+
 function findHostedOpenAiSubmitButton() {
   const direct = document.querySelector('button[data-testid="submit-button"]')
     || document.querySelector('button[data-testid="hosted-payment-submit-button"]')
@@ -278,6 +359,94 @@ function findHostedOpenAiSubmitButton() {
       || text === 'Agree'
       || text.toLowerCase().includes('subscribe');
   }) || null;
+}
+
+function getHostedOpenAiAddressErrorState() {
+  if (!isHostedOpenAiCheckoutPage() || typeof document?.querySelectorAll !== 'function') {
+    return {
+      hasError: false,
+      message: '',
+    };
+  }
+
+  const selectors = [
+    '[role="alert"]',
+    '[aria-live]',
+    '.Alert',
+    '.Error',
+    '.error',
+    '.FieldError',
+    '[class*="error"]',
+    '[class*="Error"]',
+    'div',
+    'span',
+    'p',
+  ];
+  const pattern = /customer'?s\s+location\s+isn'?t\s+recognized|set\s+a\s+valid\s+customer\s+address|automatically\s+calculate\s+tax|valid\s+customer\s+address|无法识别.*地址|地址.*无法识别|税.*地址/i;
+  const seen = new Set();
+  for (const element of Array.from(document.querySelectorAll(selectors.join(', ')))) {
+    if (!element || seen.has(element) || !isVisibleElement(element)) {
+      continue;
+    }
+    seen.add(element);
+    const text = normalizeText(element.innerText || element.textContent || '');
+    if (!text || !pattern.test(text)) {
+      continue;
+    }
+    return {
+      hasError: true,
+      message: text.slice(0, 240),
+    };
+  }
+
+  return {
+    hasError: false,
+    message: '',
+  };
+}
+
+function getHostedOpenAiCardDeclinedState() {
+  if (!isHostedOpenAiCheckoutPage() || typeof document?.querySelectorAll !== 'function') {
+    return {
+      hasError: false,
+      message: '',
+    };
+  }
+
+  const selectors = [
+    '[role="alert"]',
+    '[aria-live]',
+    '.Alert',
+    '.Error',
+    '.error',
+    '.FieldError',
+    '[class*="error"]',
+    '[class*="Error"]',
+    'div',
+    'span',
+    'p',
+  ];
+  const pattern = /(?:bank\s*)?card\s+(?:was\s+)?declined|try\s+another\s+card|payment\s+method\s+was\s+declined|银行卡被拒绝|请尝试另一张卡|请尝试另一张银行卡|您的银行卡被拒绝/i;
+  const seen = new Set();
+  for (const element of Array.from(document.querySelectorAll(selectors.join(', ')))) {
+    if (!element || seen.has(element) || !isVisibleElement(element)) {
+      continue;
+    }
+    seen.add(element);
+    const text = normalizeText(element.innerText || element.textContent || '');
+    if (!text || !pattern.test(text)) {
+      continue;
+    }
+    return {
+      hasError: true,
+      message: text.slice(0, 240),
+    };
+  }
+
+  return {
+    hasError: false,
+    message: '',
+  };
 }
 
 function dispatchHostedOpenAiClick(button) {
@@ -407,6 +576,13 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
     throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::步骤 6：检测到今日应付金额不是 0（${amountLabel}），当前账号没有免费试用资格，已自动停止整个流程。`);
   }
 
+  const cardFallbackState = getHostedOpenAiCardFallbackState();
+  if (cardFallbackState.fallback) {
+    throw new Error(
+      `${HOSTED_CHECKOUT_CARD_FALLBACK_ERROR_PREFIX}步骤 6：当前 hosted checkout 落到银行卡分支，未进入 PayPal。${cardFallbackState.reason || '页面仅展示银行卡支付。'}`
+    );
+  }
+
   await sleep(2000);
   const payPalButton = findHostedOpenAiPayPalButton();
   if (payPalButton) {
@@ -417,6 +593,8 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
 
   await sleep(3000);
 
+  const contactEmail = String(payload.email || payload.registrationEmail || '').trim();
+  const emailFillResult = await fillCheckoutContactEmail(contactEmail);
   const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
   await selectCountryDropdown(findCountryDropdown(), 'US');
   fillHostedOpenAiInputBySelector('#billingAddressLine1', address.street || '');
@@ -437,9 +615,17 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
 
   await sleep(3500);
   const clickResult = await clickHostedOpenAiSubmitButton(0);
+  const hostedAddressError = getHostedOpenAiAddressErrorState();
+  const hostedCardDeclinedError = getHostedOpenAiCardDeclinedState();
   return {
     ...clickResult,
+    contactEmail,
+    emailFillResult,
     hostedVerificationVisible: hasHostedOpenAiVerificationPopup(),
+    hostedAddressError: hostedAddressError.hasError,
+    hostedAddressErrorMessage: hostedAddressError.message,
+    hostedCardDeclinedError: hostedCardDeclinedError.hasError,
+    hostedCardDeclinedErrorMessage: hostedCardDeclinedError.message,
   };
 }
 
@@ -1709,6 +1895,65 @@ function fillIfEmpty(input, value, options = {}) {
   return true;
 }
 
+function findCheckoutEmailInput() {
+  const direct = document.getElementById('email');
+  if (direct && isVisibleElement(direct)) {
+    return direct;
+  }
+  const emailByType = getVisibleTextInputs().find((input) => {
+    const type = String(input?.getAttribute?.('type') || input?.type || '').trim().toLowerCase();
+    const autoComplete = String(input?.getAttribute?.('autocomplete') || '').trim().toLowerCase();
+    return type === 'email' || autoComplete.includes('email');
+  });
+  if (emailByType) {
+    return emailByType;
+  }
+  return findInputByFieldText([
+    /email|e-mail/i,
+    /邮箱/i,
+  ]);
+}
+
+async function fillCheckoutContactEmail(email = '', options = {}) {
+  const normalizedEmail = normalizeText(String(email || '').trim());
+  if (!normalizedEmail) {
+    log('Checkout 联系邮箱为空，跳过自动填写。', 'warn');
+    return { found: false, filled: false, skipped: true, reason: 'empty_email' };
+  }
+  const input = await waitUntil(() => {
+    const candidate = findCheckoutEmailInput();
+    return candidate && isVisibleElement(candidate) ? candidate : null;
+  }, {
+    label: 'Checkout 邮箱输入框',
+    intervalMs: 200,
+    timeoutMs: Math.max(800, Math.floor(Number(options.timeoutMs) || 2500)),
+  }).catch(() => null);
+  if (!input) {
+    log('未找到 Checkout 联系邮箱输入框，跳过自动填写。', 'warn');
+    return { found: false, filled: false, skipped: true, reason: 'input_not_found' };
+  }
+
+  const currentValue = String(input.value || '').trim();
+  if (currentValue.toLowerCase() === normalizedEmail.toLowerCase()) {
+    log(`Checkout 联系邮箱已存在且一致：${currentValue}`, 'info');
+    return { found: true, filled: true, alreadyFilled: true, value: currentValue };
+  }
+  if (currentValue && !options.overwrite) {
+    log(`Checkout 联系邮箱已有其他值，按非覆盖策略跳过：${currentValue}`, 'warn');
+    return { found: true, filled: false, skipped: true, reason: 'existing_value', value: currentValue };
+  }
+
+  fillInput(input, normalizedEmail);
+  await sleep(250);
+  log(`Checkout 联系邮箱已尝试填写为 ${normalizedEmail}`, 'info');
+  return {
+    found: true,
+    filled: String(input.value || '').trim().toLowerCase() === normalizedEmail.toLowerCase(),
+    alreadyFilled: false,
+    value: String(input.value || '').trim(),
+  };
+}
+
 function isDropdownStructuredAddressForm(fields = getStructuredAddressFields()) {
   return Boolean(
     findCountryDropdown()
@@ -1975,6 +2220,7 @@ async function fillPlusBillingAndSubmit(payload = {}) {
 async function fillPlusBillingAddress(payload = {}) {
   await waitForDocumentComplete();
   const countryText = readCountryText();
+  const contactEmail = String(payload.email || payload.registrationEmail || '').trim();
   const seed = payload.addressSeed || {
     query: 'Berlin Mitte',
     suggestionIndex: 1,
@@ -1985,6 +2231,10 @@ async function fillPlusBillingAddress(payload = {}) {
       postalCode: '10117',
     },
   };
+  let emailResult = { found: false, filled: false, skipped: true, reason: 'not_attempted', value: '' };
+  await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'fill', label: 'fill-contact-email' }, async () => {
+    emailResult = await fillCheckoutContactEmail(contactEmail);
+  });
   let selected = { selectedText: '' };
   const fields = getStructuredAddressFields();
   const useDirectStructuredBranch = Boolean(seed.skipAutocomplete || isDropdownStructuredAddressForm(fields));
@@ -2013,6 +2263,8 @@ async function fillPlusBillingAddress(payload = {}) {
 
   return {
     countryText,
+    contactEmail,
+    emailFillResult: emailResult,
     selectedAddressText: selected.selectedText,
     structuredAddress,
     agreementChecked: agreementResult.checked,
@@ -2022,6 +2274,10 @@ async function fillPlusBillingAddress(payload = {}) {
 async function fillPlusAddressQuery(payload = {}) {
   await waitForDocumentComplete();
   const seed = payload.addressSeed || {};
+  const contactEmail = String(payload.email || payload.registrationEmail || '').trim();
+  await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'fill', label: 'fill-contact-email' }, async () => {
+    await fillCheckoutContactEmail(contactEmail);
+  });
   await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'fill', label: 'fill-address-query' }, async () => {
     await ensureCountrySelectionBeforeAutocomplete(seed);
     await fillFullName(payload.fullName || '');
@@ -2046,6 +2302,10 @@ async function selectPlusAddressSuggestion(payload = {}) {
 
 async function ensurePlusStructuredBillingAddress(payload = {}) {
   await waitForDocumentComplete();
+  const contactEmail = String(payload.email || payload.registrationEmail || '').trim();
+  await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'fill', label: 'fill-contact-email' }, async () => {
+    await fillCheckoutContactEmail(contactEmail);
+  });
   const structuredAddress = await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'fill', label: 'fill-billing-address' }, async () => (
     ensureStructuredAddress(payload.addressSeed || {}, {
       overwrite: Boolean(payload.overwriteStructuredAddress),
@@ -2100,6 +2360,9 @@ async function readChatGptSessionAccessToken() {
 
 async function inspectPlusCheckoutState(options = {}) {
   const structuredAddress = getStructuredAddressFields();
+  const hostedAddressError = getHostedOpenAiAddressErrorState();
+  const hostedCardDeclinedError = getHostedOpenAiCardDeclinedState();
+  const hostedCardFallback = getHostedOpenAiCardFallbackState();
   const state = {
     url: location.href,
     readyState: document.readyState,
@@ -2116,6 +2379,15 @@ async function inspectPlusCheckoutState(options = {}) {
     billingFieldsVisible: hasBillingAddressFields(),
     hasSubscribeButton: Boolean(findSubscribeButton()),
     checkoutAmountSummary: getCheckoutAmountSummary(),
+    hostedAddressError: hostedAddressError.hasError,
+    hostedAddressErrorMessage: hostedAddressError.message,
+    hostedCardDeclinedError: hostedCardDeclinedError.hasError,
+    hostedCardDeclinedErrorMessage: hostedCardDeclinedError.message,
+    hostedCardFallback: hostedCardFallback.fallback,
+    hostedCardFallbackReason: hostedCardFallback.reason,
+    hostedCardFallbackReasons: hostedCardFallback.reasons,
+    hostedPaypalDisabledSignals: hostedCardFallback.paypalDisabledSignals,
+    hostedCardAccordionSelected: hostedCardFallback.cardAccordionSelected,
     addressFieldValues: {
       address1: structuredAddress.address1?.value || '',
       city: structuredAddress.city?.value || '',

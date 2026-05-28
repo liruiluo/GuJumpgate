@@ -163,8 +163,13 @@
       return getStep7ResultState(result) === 'verification_page' && !isStep7PhoneVerificationResult(result);
     }
 
+    function isStep7SmsOauthFlowState(state = {}) {
+      return String(state?.plusAccountAccessStrategy || '').trim().toLowerCase() === 'sms_oauth';
+    }
+
     function buildStep7CompletionPayload(result = {}, currentState = {}, currentIdentifierType = '', currentPhoneNumber = '') {
       const phoneSignupMode = currentIdentifierType === 'phone';
+      const smsOauthFlow = isStep7SmsOauthFlowState(currentState);
       const payload = {
         loginVerificationRequestedAt: result.loginVerificationRequestedAt || null,
       };
@@ -199,6 +204,12 @@
           throw new Error(`步骤 ${completionStepForState(currentState)}：手机号注册模式 OAuth 登录进入了普通邮箱登录验证码页，当前流程不会回落到邮箱验证码。URL: ${result?.url || ''}`.trim());
         }
         throw new Error(`步骤 ${completionStepForState(currentState)}：手机号注册模式 OAuth 登录进入了不允许的页面：${getLoginAuthStateLabel(result.state)}。URL: ${result?.url || ''}`.trim());
+      }
+
+      if (isStep7AddEmailResult(result) && smsOauthFlow) {
+        payload.skipLoginVerificationStep = true;
+        payload.addEmailPage = true;
+        return payload;
       }
 
       if (isStep7AddEmailResult(result)) {
@@ -239,8 +250,8 @@
     async function executeStep7(state) {
       const initialState = typeof getState === 'function'
         ? {
-          ...(state || {}),
           ...(await getState().catch(() => ({}))),
+          ...(state || {}),
         }
         : (state || {});
       const visibleStep = Math.floor(Number(initialState?.visibleStep) || 0);
@@ -267,7 +278,10 @@
         (resolvedIdentifierType === 'phone' && !phoneNumber)
         || (resolvedIdentifierType !== 'phone' && !email)
       ) {
-        throw new Error('缺少登录账号：请先完成步骤 2，或在侧栏“注册邮箱/注册手机号”中手动填写账号后再执行当前步骤。');
+        const fieldHint = resolvedIdentifierType === 'phone'
+          ? '侧栏“接码设置”里的“注册手机号”输入框'
+          : '侧栏顶部“注册邮箱”输入框（旁边有“获取”按钮）';
+        throw new Error(`缺少登录账号：请先完成步骤 2，或在${fieldHint}中手动填写账号后再执行当前步骤。`);
       }
 
       let attempt = 0;

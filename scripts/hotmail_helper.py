@@ -112,7 +112,7 @@ def json_response(handler, status, payload):
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type")
-    handler.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     try:
         handler.end_headers()
         handler.wfile.write(body)
@@ -855,8 +855,21 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def do_GET(self):
+        request_path = urlparse(self.path).path
+        if request_path in {"", "/", "/health"}:
+            json_response(self, 200, {
+                "ok": True,
+                "service": "hotmail-helper",
+                "version": 1,
+                "time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            })
+            return
+
+        json_response(self, 404, {"ok": False, "error": f"Unsupported path: {self.path}"})
 
     def do_POST(self):
         try:

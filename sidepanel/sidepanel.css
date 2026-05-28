@@ -5,8 +5,7 @@
    Themes: Light (default) + Dark (toggle)
    ============================================================ */
 
-#ip-proxy-section,
-#phone-verification-section {
+#ip-proxy-section {
   display: none !important;
 }
 
@@ -821,6 +820,27 @@ header {
   min-width: 0;
 }
 
+.current-session-export-inline {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.current-session-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.current-session-export-warning {
+  margin-left: auto;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .ip-proxy-fold-row {
   display: block;
 }
@@ -1146,6 +1166,30 @@ header {
 .hosted-checkout-manual-fetch-inline {
   flex: 1;
   min-width: 0;
+}
+
+.hosted-checkout-resend-settings-inline {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  row-gap: 6px;
+}
+
+#row-hosted-checkout-resend-settings > .data-label {
+  width: 76px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.hosted-checkout-setting-field,
+.hosted-checkout-setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.hosted-checkout-setting-toggle .toggle-switch {
+  flex: 0 0 auto;
 }
 
 .plus-checkout-conversion-proxy-test-inline {
@@ -1541,6 +1585,15 @@ header {
   justify-content: flex-end;
 }
 
+.hosted-sms-pool-import-actions {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.hosted-sms-pool-auto-disable-toggle {
+  margin-left: auto;
+}
+
 .hosted-sms-pool-phone {
   display: flex;
   align-items: center;
@@ -1563,6 +1616,15 @@ header {
   color: var(--blue);
   font-size: 11px;
   font-weight: 600;
+}
+
+.luckmail-item.is-disabled {
+  opacity: 0.72;
+}
+
+.hosted-sms-pool-disabled-reason {
+  color: var(--red);
+  font-size: 11px;
 }
 
 .luckmail-tag {
@@ -2178,6 +2240,27 @@ header {
   flex: 0 1 auto;
   gap: 8px;
   white-space: nowrap;
+}
+
+.auto-run-retry-setting-pair {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.auto-run-retry-setting-pair .setting-group-primary {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.auto-run-retry-setting-pair .auto-run-retry-non-free-trial-setting,
+.auto-run-retry-setting-pair .auto-run-retry-paypal-callback-setting {
+  flex: 0 0 auto;
+}
+
+.auto-run-retry-setting-pair .auto-step-delay-setting {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .auto-run-delay-setting {

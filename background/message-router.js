@@ -34,10 +34,12 @@
       executeNodeViaCompletionSignal,
       exportCurrentSessionJson,
       exportSettingsBundle,
+      ensureContentScriptReadyOnTabUntilStopped = null,
       fetchHostedCheckoutVerificationCodeManually = null,
       testCheckoutConversionProxy = null,
       fetchGeneratedEmail,
       refreshGpcCardBalance,
+      refreshOAuthTimeoutWindowAfterCheckoutSuccess = null,
       finalizePhoneActivationAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
@@ -155,7 +157,9 @@
       resetState,
       resumeAutoRun,
       scheduleAutoRun,
+      sendTabMessageUntilStopped = null,
       selectLuckmailPurchase,
+      sleepWithStop = async () => {},
       switchIpProxy,
       changeIpProxyExit,
       setCurrentPayPalAccount,
@@ -180,6 +184,7 @@
       skipNode,
       startContributionFlow,
       startAutoRunLoop,
+      waitForTabCompleteUntilStopped = async () => {},
       deleteMail2925Account,
       deleteMail2925Accounts,
       syncHotmailAccounts,
@@ -225,6 +230,22 @@
       preserveKeyFromState(updates, currentState, 'freePhoneReuseEnabled');
       preserveKeyFromState(updates, currentState, 'freePhoneReuseAutoEnabled');
       preserveKeyFromState(updates, currentState, 'phonePreferredActivation');
+    }
+
+    function forceDisablePhoneReuseForSmsBower(updates, currentState = {}) {
+      if (!updates || typeof updates !== 'object') {
+        return;
+      }
+      const nextProvider = normalizePhoneSmsProvider(
+        Object.prototype.hasOwnProperty.call(updates, 'phoneSmsProvider')
+          ? updates.phoneSmsProvider
+          : currentState?.phoneSmsProvider
+      );
+      if (nextProvider !== 'smsbower') {
+        return;
+      }
+      updates.phoneSmsReuseEnabled = false;
+      updates.heroSmsReuseEnabled = false;
     }
 
     async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null, reason = '') {
@@ -324,12 +345,329 @@
       return String(nodeIds[nodeIds.length - 1] || '').trim();
     }
 
+    const PLUS_CHECKOUT_SOURCE = 'plus-checkout';
+    const PAYPAL_SOURCE = 'paypal-flow';
+    const GOPAY_SOURCE = 'gopay-flow';
+    const PLUS_CHECKOUT_INJECT_FILES = ['content/utils.js', 'content/operation-delay.js', 'content/plus-checkout.js'];
+    const PAYPAL_GENERIC_ERROR_CHECK_URL = 'https://chatgpt.com/';
+    const PAYPAL_GENERIC_ERROR_SESSION_SETTLE_WAIT_MS = 5000;
+
+    function normalizeString(value = '') {
+      return String(value || '').trim();
+    }
+
     function normalizePlusPaymentMethod(value = '') {
-      const normalized = String(value || '').trim().toLowerCase();
-      if (normalized === 'gpc-helper') {
-        return 'gpc-helper';
+      return 'paypal';
+    }
+
+    function parseUrlSafely(rawUrl) {
+      const normalized = normalizeString(rawUrl);
+      if (!normalized) {
+        return null;
       }
-      return normalized === 'gopay' ? 'gopay' : 'paypal';
+      try {
+        return new URL(normalized);
+      } catch {
+        return null;
+      }
+    }
+
+    function isPlusCheckoutPaymentUrl(url = '') {
+      const parsed = parseUrlSafely(url);
+      if (!parsed) {
+        return false;
+      }
+      const hostname = normalizeString(parsed.hostname).toLowerCase();
+      return hostname === 'pay.openai.com' || hostname === 'checkout.stripe.com';
+    }
+
+    function isPayPalPaymentUrl(url = '') {
+      const parsed = parseUrlSafely(url);
+      if (!parsed) {
+        return false;
+      }
+      const hostname = normalizeString(parsed.hostname).toLowerCase();
+      return hostname === 'paypal.com' || hostname.endsWith('.paypal.com');
+    }
+
+    function isGoPayPaymentUrl(url = '') {
+      const parsed = parseUrlSafely(url);
+      if (!parsed) {
+        return false;
+      }
+      const hostname = normalizeString(parsed.hostname).toLowerCase();
+      return hostname === 'gopay.co.id'
+        || hostname.endsWith('.gopay.co.id')
+        || hostname === 'gojek.com'
+        || hostname.endsWith('.gojek.com')
+        || hostname === 'midtrans.com'
+        || hostname.endsWith('.midtrans.com')
+        || hostname === 'xendit.co'
+        || hostname.endsWith('.xendit.co')
+        || hostname === 'xendit.co.id'
+        || hostname.endsWith('.xendit.co.id');
+    }
+
+    function isKnownPaymentFlowUrl(url = '') {
+      const parsed = parseUrlSafely(url);
+      if (!parsed) {
+        return false;
+      }
+      const href = normalizeString(parsed.href);
+      if (
+        href.startsWith('https://pay.openai.com/c/pay/')
+        || href.startsWith('https://checkout.stripe.com/c/pay/')
+        || href.startsWith('https://www.paypal.com/checkoutweb/signup')
+        || href.startsWith('https://paypal.com/checkoutweb/signup')
+      ) {
+        return true;
+      }
+      return false;
+    }
+
+    async function cleanupPaymentTabsAfterSuccessfulFlow() {
+      const chromeApi = typeof chrome !== 'undefined' ? chrome : globalThis.chrome;
+      const sources = [
+        { source: PLUS_CHECKOUT_SOURCE, shouldCloseUrl: isPlusCheckoutPaymentUrl },
+        { source: PAYPAL_SOURCE, shouldCloseUrl: isPayPalPaymentUrl },
+        { source: GOPAY_SOURCE, shouldCloseUrl: isGoPayPaymentUrl },
+      ];
+      const closedIds = new Set();
+      let closedCount = 0;
+
+      if (chromeApi?.tabs?.get && chromeApi?.tabs?.remove && typeof getTabId === 'function') {
+        for (const entry of sources) {
+          try {
+            const tabId = await getTabId(entry.source);
+            if (!Number.isInteger(tabId) || tabId <= 0 || closedIds.has(tabId)) {
+              continue;
+            }
+            const tab = await chromeApi.tabs.get(tabId).catch(() => null);
+            const currentUrl = normalizeString(tab?.url);
+            if (!entry.shouldCloseUrl(currentUrl)) {
+              continue;
+            }
+            await chromeApi.tabs.remove(tabId).catch(() => {});
+            closedIds.add(tabId);
+            closedCount += 1;
+          } catch (_) {
+            // Best effort cleanup only.
+          }
+        }
+      }
+
+      if (chromeApi?.tabs?.query && chromeApi?.tabs?.remove) {
+        try {
+          const allTabs = await chromeApi.tabs.query({});
+          const matchedIds = (Array.isArray(allTabs) ? allTabs : [])
+            .filter((tab) => Number.isInteger(tab?.id))
+            .filter((tab) => !closedIds.has(tab.id))
+            .filter((tab) => isKnownPaymentFlowUrl(tab?.url || ''))
+            .map((tab) => tab.id);
+          if (matchedIds.length) {
+            await chromeApi.tabs.remove(matchedIds).catch(() => {});
+            for (const id of matchedIds) {
+              closedIds.add(id);
+            }
+            closedCount += matchedIds.length;
+          }
+        } catch (_) {
+          // Best effort cleanup only.
+        }
+      }
+
+      const latestState = await getState();
+      const nextTabRegistry = {
+        ...(latestState?.tabRegistry || {}),
+        [PLUS_CHECKOUT_SOURCE]: null,
+        [PAYPAL_SOURCE]: null,
+        [GOPAY_SOURCE]: null,
+      };
+      const nextSourceLastUrls = {
+        ...(latestState?.sourceLastUrls || {}),
+      };
+      delete nextSourceLastUrls[PLUS_CHECKOUT_SOURCE];
+      delete nextSourceLastUrls[PAYPAL_SOURCE];
+      delete nextSourceLastUrls[GOPAY_SOURCE];
+
+      await setState({
+        plusCheckoutTabId: null,
+        plusCheckoutUrl: null,
+        tabRegistry: nextTabRegistry,
+        sourceLastUrls: nextSourceLastUrls,
+      });
+
+      if (closedCount > 0) {
+        await addLog(`流程完成：已关闭 ${closedCount} 个支付相关标签页。`, 'info');
+      }
+    }
+
+    function firstNonEmpty(...values) {
+      for (const value of values) {
+        const normalized = normalizeString(value);
+        if (normalized) {
+          return normalized;
+        }
+      }
+      return '';
+    }
+
+    function collectSessionFieldValues(root, targetKeys = []) {
+      const normalizedTargets = new Set((Array.isArray(targetKeys) ? targetKeys : []).map((key) => normalizeString(key).toLowerCase()));
+      if (!normalizedTargets.size || !root || typeof root !== 'object') {
+        return [];
+      }
+
+      const results = [];
+      const queue = [{ value: root, path: '$' }];
+      const visited = new Set();
+      while (queue.length && results.length < 32) {
+        const current = queue.shift();
+        const value = current?.value;
+        if (!value || typeof value !== 'object') {
+          continue;
+        }
+        if (visited.has(value)) {
+          continue;
+        }
+        visited.add(value);
+
+        const entries = Array.isArray(value)
+          ? value.map((entry, index) => [String(index), entry])
+          : Object.entries(value);
+        for (const [key, entryValue] of entries) {
+          const normalizedKey = normalizeString(key).toLowerCase();
+          const path = `${current.path}.${key}`;
+          if (normalizedTargets.has(normalizedKey)) {
+            results.push({ key: normalizedKey, path, value: entryValue });
+          }
+          if (entryValue && typeof entryValue === 'object') {
+            queue.push({ value: entryValue, path });
+          }
+        }
+      }
+      return results;
+    }
+
+    function normalizePlanType(value = '') {
+      return normalizeString(value)
+        .toLowerCase()
+        .replace(/\s+/g, '_');
+    }
+
+    function isPaidPlanType(value = '') {
+      const normalized = normalizePlanType(value);
+      if (!normalized) {
+        return false;
+      }
+      return !/(^|[_-])(free|guest|basic|default|none|null|unknown)([_-]|$)/i.test(normalized);
+    }
+
+    function inspectPlusActivationFromSession(session = null) {
+      const planSignals = collectSessionFieldValues(session, [
+        'planType',
+        'plan_type',
+        'chatgpt_plan_type',
+      ]);
+      const booleanSignals = collectSessionFieldValues(session, [
+        'isPaid',
+        'is_paid',
+        'hasActiveSubscription',
+        'has_active_subscription',
+        'subscriptionActive',
+        'subscription_active',
+        'isSubscribed',
+        'is_subscribed',
+      ]);
+      const planType = firstNonEmpty(
+        ...planSignals.map((entry) => typeof entry?.value === 'string' ? entry.value : ''),
+        session?.account?.planType,
+        session?.account?.plan_type,
+        session?.planType,
+        session?.plan_type
+      );
+      const paidSignal = booleanSignals.some((entry) => entry?.value === true);
+      return {
+        active: paidSignal || isPaidPlanType(planType),
+        paidSignal,
+        planType,
+        planSignalPath: normalizeString(planSignals[0]?.path || ''),
+      };
+    }
+
+    async function openChatGptTabForPayPalGenericErrorCheck() {
+      const chromeApi = typeof chrome !== 'undefined' ? chrome : globalThis.chrome;
+      if (!chromeApi?.tabs?.create) {
+        throw new Error('当前环境不支持打开 ChatGPT 标签页。');
+      }
+      const tab = await chromeApi.tabs.create({ url: PAYPAL_GENERIC_ERROR_CHECK_URL, active: true });
+      const tabId = Number(tab?.id) || 0;
+      if (!tabId) {
+        throw new Error('打开 ChatGPT 页面失败，无法检查 PLUS 状态。');
+      }
+      if (typeof registerTab === 'function') {
+        await registerTab(PLUS_CHECKOUT_SOURCE, tabId);
+      }
+      return tabId;
+    }
+
+    async function readChatGptSessionForPayPalGenericErrorCheck(tabId) {
+      if (typeof ensureContentScriptReadyOnTabUntilStopped !== 'function' || typeof sendTabMessageUntilStopped !== 'function') {
+        throw new Error('缺少 ChatGPT 会话检测依赖，无法检查 PLUS 状态。');
+      }
+      await waitForTabCompleteUntilStopped(tabId, {
+        timeoutMs: 60000,
+        retryDelayMs: 300,
+      });
+      await sleepWithStop(1000);
+      await ensureContentScriptReadyOnTabUntilStopped(PLUS_CHECKOUT_SOURCE, tabId, {
+        inject: PLUS_CHECKOUT_INJECT_FILES,
+        injectSource: PLUS_CHECKOUT_SOURCE,
+        timeoutMs: 45000,
+        retryDelayMs: 700,
+        logMessage: '步骤 6：正在等待 ChatGPT 页面完成加载，以检查 PLUS 状态...',
+      });
+      const sessionResult = await sendTabMessageUntilStopped(tabId, PLUS_CHECKOUT_SOURCE, {
+        type: 'PLUS_CHECKOUT_GET_STATE',
+        source: 'background',
+        payload: {
+          includeSession: true,
+          includeAccessToken: true,
+        },
+      }, {
+        timeoutMs: 30000,
+        responseTimeoutMs: 15000,
+        retryDelayMs: 300,
+      });
+      if (sessionResult?.error) {
+        throw new Error(sessionResult.error);
+      }
+      return sessionResult || {};
+    }
+
+    async function refreshChatGptSessionAndInspectPlusActivation() {
+      const chromeApi = typeof chrome !== 'undefined' ? chrome : globalThis.chrome;
+      const tabId = await openChatGptTabForPayPalGenericErrorCheck();
+      if (typeof setState === 'function') {
+        await setState({ plusCheckoutTabId: tabId });
+      }
+      await waitForTabCompleteUntilStopped(tabId, {
+        timeoutMs: 60000,
+        retryDelayMs: 300,
+      });
+      await addLog('步骤 6：已打开 ChatGPT，等待 5 秒后刷新会话并检查 PLUS 状态。', 'info');
+      await sleepWithStop(PAYPAL_GENERIC_ERROR_SESSION_SETTLE_WAIT_MS);
+      if (chromeApi?.tabs?.reload) {
+        await chromeApi.tabs.reload(tabId).catch(() => {});
+      }
+      const sessionResult = await readChatGptSessionForPayPalGenericErrorCheck(tabId);
+      const session = sessionResult?.session && typeof sessionResult.session === 'object' ? sessionResult.session : null;
+      return {
+        tabId,
+        session,
+        accessToken: normalizeString(sessionResult?.accessToken || session?.accessToken),
+        ...inspectPlusActivationFromSession(session),
+      };
     }
 
     function shouldAutoContinueManualNode(nodeId, state = {}) {
@@ -573,11 +911,7 @@
     }
 
     function normalizePlusPaymentMethodForDisplay(value = '') {
-      const normalized = String(value || '').trim().toLowerCase();
-      if (normalized === 'gpc-helper') {
-        return 'gpc-helper';
-      }
-      return normalized === 'gopay' ? 'gopay' : 'paypal';
+      return 'paypal';
     }
 
     function getPlusPaymentMethodLabel(value = '') {
@@ -588,10 +922,15 @@
       return method === 'gopay' ? 'GoPay' : 'PayPal';
     }
 
+    function shouldDeferHotmailUsedMarkForPhoneSignup(state = {}) {
+      return Boolean(isHotmailProvider?.(state)) && resolveSignupMethod(state) === 'phone';
+    }
+
     async function handlePlatformVerifyStepData(payload) {
       if (payload.localhostUrl) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
+      await cleanupPaymentTabsAfterSuccessfulFlow();
       const latestState = await getState();
       if (typeof markCurrentRegistrationAccountUsed === 'function') {
         await markCurrentRegistrationAccountUsed(latestState, {
@@ -643,6 +982,8 @@
           updates.oauthUrl = payload.oauthUrl;
           broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
         }
+        if (payload.localCpaJsonOAuthState !== undefined) updates.localCpaJsonOAuthState = payload.localCpaJsonOAuthState || null;
+        if (payload.localCpaJsonPkceCodes !== undefined) updates.localCpaJsonPkceCodes = payload.localCpaJsonPkceCodes || null;
         if (payload.sub2apiSessionId !== undefined) updates.sub2apiSessionId = payload.sub2apiSessionId || null;
         if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
         if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
@@ -663,10 +1004,15 @@
 
       const stateForStep = await getState();
       const stepKey = getStepKeyForState(step, stateForStep);
+      const isLastNode = Boolean(stepKey) && stepKey === getLastNodeIdForState(stateForStep);
 
       if (stepKey === 'fill-profile') {
         const latestState = await getState();
-        if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+        if (
+          latestState.currentHotmailAccountId
+          && isHotmailProvider(latestState)
+          && !shouldDeferHotmailUsedMarkForPhoneSignup(latestState)
+        ) {
           if (typeof markCurrentRegistrationAccountUsed === 'function') {
             await markCurrentRegistrationAccountUsed(latestState, {
               logPrefix: '步骤 5 完成',
@@ -741,6 +1087,11 @@
         if (payload.email !== undefined) {
           updates.email = payload.email || null;
         }
+        if (payload.boundEmail !== undefined) {
+          updates.boundEmail = payload.boundEmail || '';
+        } else if (payload.bindEmailSubmitted === false) {
+          updates.boundEmail = '';
+        }
         if (payload.step8VerificationTargetEmail !== undefined) {
           updates.step8VerificationTargetEmail = payload.step8VerificationTargetEmail || '';
         }
@@ -784,6 +1135,10 @@
         return;
       }
 
+      if (isLastNode) {
+        await cleanupPaymentTabsAfterSuccessfulFlow();
+      }
+
       switch (step) {
         case 1: {
           const updates = {};
@@ -791,6 +1146,8 @@
             updates.oauthUrl = payload.oauthUrl;
             broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
           }
+          if (payload.localCpaJsonOAuthState !== undefined) updates.localCpaJsonOAuthState = payload.localCpaJsonOAuthState || null;
+          if (payload.localCpaJsonPkceCodes !== undefined) updates.localCpaJsonPkceCodes = payload.localCpaJsonPkceCodes || null;
           if (payload.sub2apiSessionId !== undefined) updates.sub2apiSessionId = payload.sub2apiSessionId || null;
           if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
           if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
@@ -799,6 +1156,8 @@
             : [];
           if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
           if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
+          if (payload.cpaOAuthState !== undefined) updates.cpaOAuthState = payload.cpaOAuthState || null;
+          if (payload.cpaManagementOrigin !== undefined) updates.cpaManagementOrigin = payload.cpaManagementOrigin || null;
           if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
           if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
           if (Object.keys(updates).length) {
@@ -840,7 +1199,10 @@
             const step5Status = getNodeStatusByStep(5, latestState);
             if (step5Status !== 'running' && step5Status !== 'completed' && step5Status !== 'manual_completed') {
               await setNodeStatusByStep(5, 'skipped', latestState);
-              if (typeof markCurrentRegistrationAccountUsed === 'function') {
+              if (
+                typeof markCurrentRegistrationAccountUsed === 'function'
+                && !shouldDeferHotmailUsedMarkForPhoneSignup(latestState)
+              ) {
                 await markCurrentRegistrationAccountUsed(latestState, {
                   logPrefix: '步骤 3 跳过步骤 5',
                   level: 'ok',
@@ -869,7 +1231,10 @@
             const step5Status = getNodeStatusByStep(5, latestState);
             if (step5Status !== 'running' && step5Status !== 'completed' && step5Status !== 'manual_completed') {
               await setNodeStatusByStep(5, 'skipped', latestState);
-              if (typeof markCurrentRegistrationAccountUsed === 'function') {
+              if (
+                typeof markCurrentRegistrationAccountUsed === 'function'
+                && !shouldDeferHotmailUsedMarkForPhoneSignup(latestState)
+              ) {
                 await markCurrentRegistrationAccountUsed(latestState, {
                   logPrefix: '步骤 4 跳过步骤 5',
                   level: 'ok',
@@ -886,20 +1251,33 @@
         case 7:
           await syncStepAccountIdentityFromPayload(payload);
           if (payload.loginVerificationRequestedAt) {
-            await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
+            await setState({
+              loginVerificationRequestedAt: payload.loginVerificationRequestedAt,
+              lastLoginCode: null,
+            });
+            broadcastDataUpdate({ lastLoginCode: null });
           }
           break;
         case 8:
-          await setState({
-            ...(payload.phoneVerification || payload.loginPhoneVerification ? {
-              currentPhoneVerificationCode: '',
-              signupPhoneVerificationRequestedAt: null,
-              signupPhoneVerificationPurpose: '',
-            } : {
-              lastEmailTimestamp: payload.emailTimestamp || null,
-            }),
-            loginVerificationRequestedAt: null,
-          });
+          {
+            const step8StateUpdates = {
+              ...(payload.phoneVerification || payload.loginPhoneVerification ? {
+                currentPhoneVerificationCode: '',
+                signupPhoneVerificationRequestedAt: null,
+                signupPhoneVerificationPurpose: '',
+              } : {
+                lastEmailTimestamp: payload.emailTimestamp || null,
+                ...(Object.prototype.hasOwnProperty.call(payload, 'code') ? {
+                  lastLoginCode: payload.code || null,
+                } : {}),
+              }),
+              loginVerificationRequestedAt: null,
+            };
+            await setState(step8StateUpdates);
+            if (Object.prototype.hasOwnProperty.call(step8StateUpdates, 'lastLoginCode')) {
+              broadcastDataUpdate({ lastLoginCode: step8StateUpdates.lastLoginCode });
+            }
+          }
           break;
         case 9:
           if (payload.localhostUrl) {
@@ -1073,21 +1451,72 @@
           };
 
           if (isPayPalHostedGenericError) {
-            await setState(clearManualConfirmationState);
-            if (typeof broadcastDataUpdate === 'function') {
-              broadcastDataUpdate(clearManualConfirmationState);
-            }
-
             if (action === 'check' && confirmed) {
-              const chromeApi = typeof chrome !== 'undefined' ? chrome : globalThis.chrome;
-              if (chromeApi?.tabs?.create) {
-                await chromeApi.tabs.create({ url: 'https://chatgpt.com/', active: true }).catch(() => {});
+              let inspection = null;
+              try {
+                clearStopRequest?.();
+                inspection = await refreshChatGptSessionAndInspectPlusActivation();
+              } catch (error) {
+                const reason = normalizeString(error?.message || error) || '未知错误';
+                await addLog(`步骤 6：已按你的选择刷新 ChatGPT 会话，但检查 PLUS 状态失败：${reason}`, 'warn');
+                return { ok: true, plusActive: false, checkError: reason };
               }
-              await addLog('步骤 6：已按你的选择打开 ChatGPT，请检查 PLUS 是否正常开通。', 'info');
-              return { ok: true };
+
+              if (!inspection?.active) {
+                const planSuffix = inspection?.planType ? `（planType=${inspection.planType}）` : '';
+                await addLog(`步骤 6：已按你的选择刷新 ChatGPT 会话，但暂未检测到 PLUS 已生效${planSuffix}。`, 'warn');
+                return { ok: true, plusActive: false, planType: inspection?.planType || '' };
+              }
+
+              await setState(clearManualConfirmationState);
+              if (typeof broadcastDataUpdate === 'function') {
+                broadcastDataUpdate(clearManualConfirmationState);
+              }
+
+              const completedNodeId = confirmationNodeId || 'plus-checkout-create';
+              const completedStep = findStepByNodeId(completedNodeId, currentState) || step || 6;
+              if (typeof invalidateDownstreamAfterStepRestart === 'function') {
+                await invalidateDownstreamAfterStepRestart(completedStep, {
+                  logLabel: 'PayPal genericError 后检测到 PLUS 已生效',
+                });
+              }
+              await addLog(`步骤 6：已检测到 PLUS 生效（planType=${inspection.planType || 'unknown'}），准备继续下一步。`, 'ok');
+              if (typeof refreshOAuthTimeoutWindowAfterCheckoutSuccess === 'function') {
+                await refreshOAuthTimeoutWindowAfterCheckoutSuccess({
+                  source: 'paypal-hosted-generic-error-check',
+                });
+              }
+              await completeNodeFromBackground(completedNodeId, {
+                plusDetectedPlanType: inspection.planType || '',
+                plusCheckoutTabId: inspection.tabId,
+              });
+              const latestExecutionState = await getState();
+              if (shouldAutoContinueManualNode(completedNodeId, latestExecutionState)) {
+                const nextNodeId = getNextNodeIdForState(completedNodeId, latestExecutionState);
+                if (nextNodeId) {
+                  await addLog(`步骤 ${completedStep} 已完成，正在继续执行下一节点 ${nextNodeId}。`, 'info', {
+                    step: completedStep,
+                    nodeId: completedNodeId,
+                  });
+                  await executeNodeForManualChain(nextNodeId);
+                }
+              }
+              return { ok: true, plusActive: true, planType: inspection.planType || '' };
             }
 
             if (action === 'retry' && confirmed) {
+              await setState({
+                ...clearManualConfirmationState,
+                paypalGenericErrorRecoveryCount: 0,
+                paypalApprovalBranchRecoveryCount: 0,
+              });
+              if (typeof broadcastDataUpdate === 'function') {
+                broadcastDataUpdate({
+                  ...clearManualConfirmationState,
+                  paypalGenericErrorRecoveryCount: 0,
+                  paypalApprovalBranchRecoveryCount: 0,
+                });
+              }
               clearStopRequest?.();
               const retryNodeId = 'plus-checkout-create';
               const retryStep = findStepByNodeId(retryNodeId, currentState) || 6;
@@ -1108,6 +1537,11 @@
                 }
               }
               return { ok: true };
+            }
+
+            await setState(clearManualConfirmationState);
+            if (typeof broadcastDataUpdate === 'function') {
+              broadcastDataUpdate(clearManualConfirmationState);
             }
 
             const cancelMessage = '已取消 PayPal Checkout 异常处理';
@@ -1301,6 +1735,12 @@
           if (message.source === 'sidepanel') {
             await invalidateDownstreamAfterStepRestart(resolvedStep, { logLabel: `节点 ${nodeId} 重新执行` });
           }
+          if (nodeId === 'plus-checkout-create') {
+            await setState({
+              paypalGenericErrorRecoveryCount: 0,
+              paypalApprovalBranchRecoveryCount: 0,
+            });
+          }
           if (message.payload.email) {
             await setEmailState(message.payload.email);
           }
@@ -1487,6 +1927,7 @@
           if (normalizeSignupMethod(nextPersistedSignupMethod) === 'phone') {
             preservePhoneReuseSettingsForPhoneSignup(updates, currentState);
           }
+          forceDisablePhoneReuseForSmsBower(updates, currentState);
           const modeChanged = Object.prototype.hasOwnProperty.call(updates, 'plusModeEnabled')
             && Boolean(currentState?.plusModeEnabled) !== Boolean(updates.plusModeEnabled);
           const plusPaymentChanged = Object.prototype.hasOwnProperty.call(updates, 'plusPaymentMethod')

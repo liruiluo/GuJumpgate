@@ -10,11 +10,13 @@
     'https://checkout.stripe.com/c/pay/*',
   ];
   const PLUS_CHECKOUT_FRAME_READY_DELAY_MS = 500;
+  const PLUS_CHECKOUT_FRAME_WAIT_TIMEOUT_MS = 30000;
   const PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS = 3;
   const PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS = 20000;
   const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
   const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+  const PLUS_ACCOUNT_ACCESS_STRATEGY_SMS_OAUTH = 'sms_oauth';
   const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
   const GPC_HELPER_PHONE_MODE_AUTO = 'auto';
   const GPC_HELPER_PHONE_MODE_MANUAL = 'manual';
@@ -102,10 +104,11 @@
       probeIpProxyExit = null,
       throwIfStopped = () => {},
     } = deps;
+    let activeVisibleStep = 7;
 
     function addLog(message, level = 'info', options = {}) {
       return rawAddLog(message, level, {
-        step: 7,
+        step: activeVisibleStep,
         stepKey: 'plus-checkout-billing',
         ...(options && typeof options === 'object' ? options : {}),
       });
@@ -117,6 +120,16 @@
 
     function normalizeText(value = '') {
       return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function isSmsOauthCheckoutState(state = {}) {
+      return normalizePlusPaymentMethod(state?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_PAYPAL
+        && String(state?.plusAccountAccessStrategy || '').trim().toLowerCase() === PLUS_ACCOUNT_ACCESS_STRATEGY_SMS_OAUTH;
+    }
+
+    function getCheckoutBillingDisplayStep(state = {}) {
+      const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
+      return visibleStep > 0 ? visibleStep : 7;
     }
 
     function isGpcHelperCheckout(state = {}) {
@@ -1700,6 +1713,11 @@
         Number.isFinite(Number(amountSummary.amount)) ? String(amountSummary.amount) : '未知金额'
       );
       const stopReason = `步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格。`;
+      if (isSmsOauthCheckoutState(state)) {
+        const checkoutStep = getCheckoutBillingDisplayStep(state);
+        await addLog(`${stopReason} 先手机号注册 OAuth 将保留当前注册流程，直接回到第 ${checkoutStep} 步重新创建 Checkout。`, 'warn');
+        throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::${stopReason}`);
+      }
       const shouldRetryNonFreeTrial = Boolean(state?.autoRunRetryNonFreeTrial);
       await addLog(
         shouldRetryNonFreeTrial
@@ -1759,35 +1777,56 @@
       };
     }
 
-    async function waitForBillingFrame(tabId) {
+    async function waitForFrameMatch(resolveInspections, pickFrame, options = {}) {
+      const label = String(options.label || 'checkout frame').trim() || 'checkout frame';
+      const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || PLUS_CHECKOUT_FRAME_WAIT_TIMEOUT_MS));
+      const startedAt = Date.now();
+      let lastInspections = [];
+
       while (true) {
-        const frames = await getReadyCheckoutFrames(tabId);
-        const inspections = await inspectCheckoutFrames(tabId, frames);
-        const picked = pickBillingFrame(inspections);
+        const inspections = await resolveInspections();
+        lastInspections = Array.isArray(inspections) ? inspections : [];
+        const picked = pickFrame(lastInspections);
         if (picked) {
           return {
-            frameId: picked.frame.frameId,
-            frameUrl: picked.frame.url || '',
-            countryText: picked.result?.countryText || '',
-            ready: picked.frame.ready !== false,
-            inspections,
+            picked,
+            inspections: lastInspections,
           };
+        }
+        if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+          const frameSummary = buildFrameSummary(lastInspections) || 'none';
+          throw new Error(`步骤 7：等待${label}超时（${Math.round(timeoutMs / 1000)} 秒）。frame 摘要：${frameSummary}`);
         }
         await sleepWithStop(250);
       }
     }
 
+    async function waitForBillingFrame(tabId) {
+      const result = await waitForFrameMatch(async () => {
+        const frames = await getReadyCheckoutFrames(tabId);
+        return inspectCheckoutFrames(tabId, frames);
+      }, pickBillingFrame, {
+        label: '账单地址 iframe',
+      });
+      const picked = result.picked;
+      return {
+        frameId: picked.frame.frameId,
+        frameUrl: picked.frame.url || '',
+        countryText: picked.result?.countryText || '',
+        ready: picked.frame.ready !== false,
+        inspections: result.inspections,
+      };
+    }
+
     async function waitForSubscribeFrame(tabId, candidateFrames) {
       const frames = candidateFrames.length ? candidateFrames : [{ frameId: 0, url: '' }];
-      while (true) {
+      const result = await waitForFrameMatch(async () => {
         const readyFrames = await ensurePlusCheckoutFramesReady(tabId, frames);
-        const inspections = await inspectCheckoutFrames(tabId, readyFrames);
-        const picked = pickSubscribeFrame(inspections);
-        if (picked) {
-          return picked.frame;
-        }
-        await sleepWithStop(250);
-      }
+        return inspectCheckoutFrames(tabId, readyFrames);
+      }, pickSubscribeFrame, {
+        label: '订阅按钮 iframe',
+      });
+      return result.picked.frame;
     }
 
     async function getCheckoutTabId(state = {}) {
@@ -1814,6 +1853,7 @@
     }
 
     async function executePlusCheckoutBilling(state = {}) {
+      activeVisibleStep = getCheckoutBillingDisplayStep(state);
       if (isGpcHelperCheckout(state)) {
         await executeGpcHelperBilling(state);
         return;
@@ -1849,6 +1889,17 @@
 
       const randomName = generateRandomName();
       const fullName = [randomName.firstName, randomName.lastName].filter(Boolean).join(' ');
+      const registrationEmail = String(
+        state?.email
+        || state?.registrationEmailState?.current
+        || ''
+      ).trim();
+      await addLog(
+        registrationEmail
+          ? `步骤 7：checkout 联系邮箱准备使用 ${registrationEmail}。`
+          : '步骤 7：当前状态中没有可用注册邮箱，checkout 联系邮箱自动填写将跳过。',
+        registrationEmail ? 'info' : 'warn'
+      );
 
       await addLog(`步骤 7：正在切换 ${paymentConfig.label} 付款方式...`, 'info');
       const paymentResult = await sendFrameMessage(tabId, paymentFrame.frameId, {
@@ -1947,6 +1998,7 @@
           source: 'background',
           payload: {
             fullName,
+            email: registrationEmail,
             addressSeed,
             autoCheckAgreement: Boolean(addressSeed.autoCheckAgreement),
           },
@@ -1971,6 +2023,7 @@
           type: 'PLUS_CHECKOUT_ENSURE_BILLING_ADDRESS',
           source: 'background',
           payload: {
+            email: registrationEmail,
             addressSeed,
             overwriteStructuredAddress: Boolean(suggestionError),
             autoCheckAgreement: Boolean(addressSeed.autoCheckAgreement),
@@ -1990,6 +2043,7 @@
           source: 'background',
           payload: {
             fullName,
+            email: registrationEmail,
             addressSeed,
             autoCheckAgreement: Boolean(addressSeed.autoCheckAgreement),
           },
@@ -1998,6 +2052,20 @@
         if (result?.error) {
           throw new Error(result.error);
         }
+      }
+
+      const emailFillResult = result?.emailFillResult || null;
+      if (emailFillResult) {
+        const summary = JSON.stringify({
+          contactEmail: result?.contactEmail || registrationEmail || '',
+          found: Boolean(emailFillResult.found),
+          filled: Boolean(emailFillResult.filled),
+          alreadyFilled: Boolean(emailFillResult.alreadyFilled),
+          skipped: Boolean(emailFillResult.skipped),
+          reason: String(emailFillResult.reason || ''),
+          value: String(emailFillResult.value || ''),
+        });
+        await addLog(`步骤 7：checkout 联系邮箱处理结果：${summary}`, 'info');
       }
 
       await setState({
@@ -2060,6 +2128,11 @@
 
     return {
       executePlusCheckoutBilling,
+      __test: {
+        PLUS_CHECKOUT_FRAME_WAIT_TIMEOUT_MS,
+        buildFrameSummary,
+        waitForFrameMatch,
+      },
     };
   }
 

@@ -10,6 +10,7 @@
       completeNodeFromBackground,
       createLocalCliProxyApi = null,
       ensureContentScriptReadyOnTab,
+      getState = null,
       getPanelMode,
       getTabId,
       isLocalhostOAuthCallbackUrl,
@@ -73,11 +74,25 @@
     }
 
     function resolveConfirmOauthStep(platformVerifyStep = 10) {
-      return Number(platformVerifyStep) >= 13 ? 12 : 9;
+      const normalizedStep = Math.floor(Number(platformVerifyStep) || 0);
+      if (normalizedStep >= 13) {
+        return 12;
+      }
+      if (normalizedStep >= 12) {
+        return 11;
+      }
+      return 9;
     }
 
     function resolveAuthLoginStep(platformVerifyStep = 10) {
-      return Number(platformVerifyStep) >= 13 ? 10 : 7;
+      const normalizedStep = Math.floor(Number(platformVerifyStep) || 0);
+      if (normalizedStep >= 13) {
+        return 10;
+      }
+      if (normalizedStep >= 12) {
+        return 6;
+      }
+      return 7;
     }
 
     function addStepLog(step, message, level = 'info') {
@@ -293,16 +308,24 @@
     }
 
     async function executeStep10(state) {
-      if (getPanelMode(state) === 'local-cpa-json') {
-        return executeLocalCpaJsonStep10(state);
+      const latestState = typeof getState === 'function'
+        ? await getState().catch(() => ({}))
+        : {};
+      const effectiveState = {
+        ...(state || {}),
+        ...(latestState || {}),
+      };
+
+      if (getPanelMode(effectiveState) === 'local-cpa-json') {
+        return executeLocalCpaJsonStep10(effectiveState);
       }
-      if (getPanelMode(state) === 'codex2api') {
-        return executeCodex2ApiStep10(state);
+      if (getPanelMode(effectiveState) === 'codex2api') {
+        return executeCodex2ApiStep10(effectiveState);
       }
-      if (getPanelMode(state) === 'sub2api') {
-        return executeSub2ApiStep10(state);
+      if (getPanelMode(effectiveState) === 'sub2api') {
+        return executeSub2ApiStep10(effectiveState);
       }
-      return executeCpaStep10(state);
+      return executeCpaStep10(effectiveState);
     }
 
     async function executeCpaStep10(state) {

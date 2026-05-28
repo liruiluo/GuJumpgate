@@ -9,7 +9,9 @@ const PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL = 'account_create_email';
 const PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT = 'guest_checkout';
 const PAYPAL_HOSTED_STAGE_VERIFICATION = 'verification';
 const PAYPAL_HOSTED_STAGE_REVIEW = 'review_consent';
+const PAYPAL_HOSTED_STAGE_REDIRECTING = 'redirecting';
 const PAYPAL_HOSTED_STAGE_APPROVAL = 'approval';
+const PAYPAL_HOSTED_STAGE_BLOCKED = 'blocked';
 const PAYPAL_HOSTED_STAGE_GENERIC_ERROR = 'generic_error';
 const PAYPAL_HOSTED_STAGE_UNKNOWN = 'unknown';
 const PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_HERMES_AUTORUN__';
@@ -152,6 +154,18 @@ function findClickableByText(patterns) {
   }) || null;
 }
 
+function findEnabledClickableByText(patterns) {
+  const normalizedPatterns = (Array.isArray(patterns) ? patterns : [patterns]).filter(Boolean);
+  const candidates = getVisibleControls('button, a, [role="button"], input[type="button"], input[type="submit"]');
+  return candidates.find((el) => {
+    if (!isEnabledControl(el)) {
+      return false;
+    }
+    const text = getActionText(el);
+    return normalizedPatterns.some((pattern) => pattern.test(text));
+  }) || null;
+}
+
 function findInputByPatterns(patterns) {
   const inputs = getVisibleControls('input')
     .filter((input) => {
@@ -234,9 +248,9 @@ function findPasswordLoginButton() {
 }
 
 function findApproveButton() {
-  return findClickableByText([
-    /同意并继续|同意|继续|授权|确认并继续/i,
-    /agree\s*(?:and)?\s*continue|continue|accept|authorize|agree|pay\s*now/i,
+  return findEnabledClickableByText([
+    /同意并继续|同意|授权|确认并继续/i,
+    /agree\s*(?:and)?\s*continue|accept|authorize|agree|pay\s*now/i,
   ]);
 }
 
@@ -306,6 +320,59 @@ function isPayPalHostedGenericErrorPage() {
     );
 }
 
+function getPayPalHostedGuestCardErrorMessage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  const match = bodyText.match(
+    /We\s+weren[’']?t\s+able\s+to\s+add\s+this\s+card\.?\s*Check\s+all\s+the\s+details\s+are\s+correct\s+and\s+try\s+again\s+or\s+try\s+a\s+different\s+card\.?|无法添加此卡|无法新增此卡|请检查所有详细信息是否正确.*(?:其他|不同).*卡/i
+  );
+  return match ? match[0] : '';
+}
+
+function hasPayPalHostedGuestCardError() {
+  return Boolean(getPayPalHostedGuestCardErrorMessage());
+}
+
+function getPayPalHostedGuestPhoneErrorMessage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  const match = bodyText.match(
+    /We[’']?re\s+unable\s+to\s+complete\s+your\s+request\.?\s*Try\s+a\s+different\s+phone\s+number\.?|Try\s+a\s+different\s+phone\s+number\.?|请尝试其他手机号|请更换手机号/i
+  );
+  return match ? match[0] : '';
+}
+
+function hasPayPalHostedGuestPhoneError() {
+  return Boolean(getPayPalHostedGuestPhoneErrorMessage());
+}
+
+function getPayPalHostedBlockedMessage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  const match = bodyText.match(
+    /You\s+have\s+been\s+blocked\.?|We\s+couldn[’']?t\s+load\s+the\s+security\s+challenge\.?/i
+  );
+  return match ? match[0] : '';
+}
+
+function isPayPalHostedBlockedPage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  return Boolean(getPayPalHostedBlockedMessage())
+    || (
+      /you\s+have\s+been\s+blocked/i.test(bodyText)
+      && /security\s+challenge/i.test(bodyText)
+    );
+}
+
+function getPayPalHostedRedirectingMessage() {
+  const bodyText = normalizeText(document.body?.innerText || '');
+  const match = bodyText.match(
+    /saving\s+your\s+info.*sending\s+you\s+back\s+to\s+the\s+merchant\.?/i
+  );
+  return match ? match[0] : '';
+}
+
+function isPayPalHostedRedirectingState() {
+  return Boolean(getPayPalHostedRedirectingMessage());
+}
+
 function isPayPalHostedReviewPage() {
   return /\/webapps\/hermes/i.test(getPayPalHostedPathname());
 }
@@ -347,7 +414,7 @@ function findHostedReviewConsentButton() {
   if (direct && isVisibleElement(direct) && isEnabledControl(direct)) {
     return direct;
   }
-  return findClickableByText([
+  return findEnabledClickableByText([
     /agree\s*(?:and)?\s*continue|accept|continue/i,
     /同意并继续|同意|继续/i,
   ]);
@@ -360,6 +427,9 @@ function detectPayPalHostedCheckoutStage() {
   if (hasHostedVerificationInputs()) {
     return PAYPAL_HOSTED_STAGE_VERIFICATION;
   }
+  if (isPayPalHostedBlockedPage()) {
+    return PAYPAL_HOSTED_STAGE_BLOCKED;
+  }
   if (isPayPalHostedGenericErrorPage()) {
     return PAYPAL_HOSTED_STAGE_GENERIC_ERROR;
   }
@@ -368,6 +438,9 @@ function detectPayPalHostedCheckoutStage() {
   }
   if (isPayPalHostedGuestCheckoutPage()) {
     return PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT;
+  }
+  if (isPayPalHostedRedirectingState()) {
+    return PAYPAL_HOSTED_STAGE_REDIRECTING;
   }
   if (isPayPalHostedReviewPage() && findHostedReviewConsentButton()) {
     return PAYPAL_HOSTED_STAGE_REVIEW;
@@ -744,6 +817,12 @@ async function fillHostedGuestCheckout(payload = {}) {
   if (!rootScope[PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL]) {
     rootScope[PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL] = true;
     setTimeout(() => {
+      try {
+        throwIfStopped();
+      } catch (error) {
+        rootScope[PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL] = false;
+        return;
+      }
       clickHostedGenericSubmitButton(0).catch((error) => {
         log(`PayPal hosted checkout guest submit 失败：${error?.message || error}`, 'warn');
       }).finally(() => {
@@ -769,9 +848,8 @@ async function clickHostedReviewConsent() {
     const pageText = document.body ? document.body.innerText : '';
     if (String(pageText || '').includes('Set up once. Pay faster next time')) {
       log(`PayPal Hermes：第 ${waited}/30 秒命中目标文案，开始寻找 consentButton。`, 'info');
-      let button = document.getElementById('consentButton')
-        || document.querySelector('button[data-testid="consentButton"]');
-      if (button) {
+      let button = findHostedReviewConsentButton();
+      if (button && isEnabledControl(button)) {
         log('PayPal Hermes：已找到 consentButton，准备点击 Agree and Continue。', 'info');
         button.click();
         return {
@@ -781,8 +859,8 @@ async function clickHostedReviewConsent() {
       }
       log('PayPal Hermes：首次未找到 consentButton，2 秒后重试一次。', 'warn');
       await sleep(2000);
-      button = document.getElementById('consentButton');
-      if (button) {
+      button = findHostedReviewConsentButton();
+      if (button && isEnabledControl(button)) {
         log('PayPal Hermes：重试后找到 consentButton，准备点击 Agree and Continue。', 'info');
         button.click();
         return {
@@ -803,10 +881,14 @@ async function clickHostedReviewConsent() {
 }
 
 async function runHostedCheckoutStep(payload = {}) {
-  if (isPayPalHostedReviewPage()) {
-    return clickHostedReviewConsent();
-  }
   const stage = detectPayPalHostedCheckoutStage();
+  if (payload.resendVerificationCode && stage !== PAYPAL_HOSTED_STAGE_VERIFICATION) {
+    return {
+      stage,
+      submitted: false,
+      resendSkipped: true,
+    };
+  }
   if (stage === PAYPAL_HOSTED_STAGE_VERIFICATION) {
     if (payload.resendVerificationCode) {
       return clickHostedVerificationResend();
@@ -1081,8 +1163,16 @@ function inspectPayPalState() {
     hostedAccountCreateEmail: hostedStage === PAYPAL_HOSTED_STAGE_ACCOUNT_CREATE_EMAIL,
     hostedAccountCreateEmailContinueReady: Boolean(findHostedAccountCreateEmailContinueButton()),
     hasHostedGuestCheckout: hostedStage === PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT,
+    hostedBlocked: hostedStage === PAYPAL_HOSTED_STAGE_BLOCKED,
+    hostedBlockedMessage: getPayPalHostedBlockedMessage(),
     hostedGenericError: hostedStage === PAYPAL_HOSTED_STAGE_GENERIC_ERROR,
     hostedGenericErrorMessage: getPayPalHostedGenericErrorMessage(),
+    hostedRedirecting: hostedStage === PAYPAL_HOSTED_STAGE_REDIRECTING,
+    hostedRedirectingMessage: getPayPalHostedRedirectingMessage(),
+    hostedGuestCardError: hasPayPalHostedGuestCardError(),
+    hostedGuestCardErrorMessage: getPayPalHostedGuestCardErrorMessage(),
+    hostedGuestPhoneError: hasPayPalHostedGuestPhoneError(),
+    hostedGuestPhoneErrorMessage: getPayPalHostedGuestPhoneErrorMessage(),
     verificationInputsVisible: hasHostedVerificationInputs(),
     hostedVerificationInvalidCode: hasHostedInvalidVerificationCodeError(),
     hostedVerificationErrorText: getHostedVerificationErrorText(),

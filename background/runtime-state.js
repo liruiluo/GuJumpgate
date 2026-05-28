@@ -30,6 +30,8 @@
         'localhostUrl',
       ]),
       platformBinding: Object.freeze([
+        'localCpaJsonOAuthState',
+        'localCpaJsonPkceCodes',
         'cpaOAuthState',
         'cpaManagementOrigin',
         'sub2apiSessionId',
@@ -118,6 +120,7 @@
         'accountIdentifier',
         'registrationEmailState',
         'email',
+        'boundEmail',
         'password',
         'lastEmailTimestamp',
         'lastSignupCode',

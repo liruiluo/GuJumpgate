@@ -28,6 +28,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'GET_LOGIN_AUTH_STATE'
       || message.type === 'SUBMIT_ADD_EMAIL'
       || message.type === 'GET_STEP5_SUBMIT_STATE'
+      || message.type === 'SKIP_CREATE_ACCOUNT_ENROLL_PASSKEY'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
       || message.type === 'RECOVER_AUTH_RETRY_PAGE'
       || message.type === 'RECOVER_STEP5_SUBMIT_RETRY_PAGE'
@@ -120,6 +121,8 @@ async function handleCommand(message) {
       return await submitAddEmailAndContinue(message.payload);
     case 'GET_STEP5_SUBMIT_STATE':
       return getStep5SubmitState();
+    case 'SKIP_CREATE_ACCOUNT_ENROLL_PASSKEY':
+      return await skipCreateAccountEnrollPasskey(message.payload);
     case 'PREPARE_SIGNUP_VERIFICATION':
       return await prepareSignupVerificationFlow(message.payload);
     case 'RECOVER_AUTH_RETRY_PAGE':
@@ -3160,6 +3163,100 @@ function isAddEmailPageReady() {
     && !/继续使用(?:电子邮件地址|邮箱)登录|continue\s+using\s+(?:an?\s+)?email(?:\s+address)?\s+(?:to\s+)?(?:log\s*in|sign\s*in)|continue\s+with\s+email/i.test(pageText);
 }
 
+const CREATE_ACCOUNT_ENROLL_PASSKEY_PATH_PATTERN = /\/create-account-enroll-passkey(?:[/?#]|$)/i;
+const CREATE_ACCOUNT_ENROLL_PASSKEY_HEADING_PATTERN = /create\s+your\s+account\s+with\s+a?\s*passkey|sign\s+in\s+faster\s+and\s+more\s+safely.*without\s+a\s+password|使用通行密钥.*创建账户|下次登录时.*无需密码.*更快更安全|通行密钥/i;
+const CREATE_ACCOUNT_ENROLL_PASSKEY_SKIP_PATTERN = /(?:^|\b)(?:skip|跳过)(?:\b|$)/i;
+const CREATE_ACCOUNT_ENROLL_PASSKEY_PRIMARY_PATTERN = /add\s+passkey|添加通行密钥|创建账户.*通行密钥|create\s+your\s+account\s+with\s+a?\s*passkey/i;
+
+function findCreateAccountEnrollPasskeyButton(matcher, { allowDisabled = false } = {}) {
+  const candidates = document.querySelectorAll(
+    'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
+  );
+
+  for (const el of candidates) {
+    if (!isVisibleElement(el)) continue;
+    if (!allowDisabled && !isActionEnabled(el)) continue;
+
+    const ddActionName = String(el.getAttribute?.('data-dd-action-name') || '').trim().toLowerCase();
+    const text = getActionText(el);
+    if (matcher({ ddActionName, text, element: el })) {
+      return el;
+    }
+  }
+
+  return null;
+}
+
+function getCreateAccountEnrollPasskeyPageState() {
+  const path = `${location.pathname || ''} ${location.href || ''}`;
+  const pageText = getPageTextSnapshot();
+  const skipButton = findCreateAccountEnrollPasskeyButton(({ ddActionName, text }) => (
+    ddActionName === 'skip create account enroll passkey'
+    || CREATE_ACCOUNT_ENROLL_PASSKEY_SKIP_PATTERN.test(text)
+  ));
+  const primaryButton = findCreateAccountEnrollPasskeyButton(({ ddActionName, text }) => (
+    ddActionName === 'create account enroll passkey'
+    || CREATE_ACCOUNT_ENROLL_PASSKEY_PRIMARY_PATTERN.test(text)
+  ), { allowDisabled: true });
+  const headingMatched = CREATE_ACCOUNT_ENROLL_PASSKEY_HEADING_PATTERN.test(pageText);
+  const pathMatched = CREATE_ACCOUNT_ENROLL_PASSKEY_PATH_PATTERN.test(path);
+  const dataActionMatched = Boolean(
+    document.querySelector('[data-dd-action-name="skip create account enroll passkey"], [data-dd-action-name="create account enroll passkey"]')
+  );
+
+  if (!pathMatched && !headingMatched && !dataActionMatched && !skipButton && !primaryButton) {
+    return null;
+  }
+
+  return {
+    url: location.href,
+    pathMatched,
+    headingMatched,
+    dataActionMatched,
+    skipButtonFound: Boolean(skipButton),
+    skipEnabled: Boolean(skipButton && isActionEnabled(skipButton)),
+    primaryButtonFound: Boolean(primaryButton),
+  };
+}
+
+async function skipCreateAccountEnrollPasskey(options = {}) {
+  const {
+    timeoutMs = 15000,
+    settleMs = 1000,
+  } = options;
+  const start = Date.now();
+  let clickCount = 0;
+
+  while (Date.now() - start < timeoutMs) {
+    throwIfStopped();
+
+    const pageState = getCreateAccountEnrollPasskeyPageState();
+    if (!pageState) {
+      return {
+        skipped: clickCount > 0,
+        url: location.href,
+      };
+    }
+
+    const skipButton = findCreateAccountEnrollPasskeyButton(({ ddActionName, text }) => (
+      ddActionName === 'skip create account enroll passkey'
+      || CREATE_ACCOUNT_ENROLL_PASSKEY_SKIP_PATTERN.test(text)
+    ));
+
+    if (skipButton && isActionEnabled(skipButton)) {
+      clickCount += 1;
+      await humanPause(350, 900);
+      simulateClick(skipButton);
+      await sleep(settleMs);
+      continue;
+    }
+
+    await sleep(200);
+  }
+
+  throw new Error(`步骤 5：已进入通行密钥页，但未能自动点击“跳过”。URL: ${location.href}`);
+}
+
 function isPhoneVerificationPageReady() {
   const path = `${location.pathname || ''} ${location.href || ''}`;
   const isPhoneVerificationRoute = /\/phone-verification(?:[/?#]|$)/i.test(path);
@@ -4179,12 +4276,42 @@ function findLoginMoreOptionsTrigger() {
   }) || null;
 }
 
+function findChooseAccountExistingSessionButton({ allowDisabled = false } = {}) {
+  const candidates = Array.from(document.querySelectorAll(
+    'button[name="session_id"], button[data-dd-action-name], button'
+  ));
+  return candidates.find((el) => {
+    if (!isVisibleElement(el)) return false;
+    if (!allowDisabled && !isActionEnabled(el)) return false;
+    const ddActionName = String(el.getAttribute?.('data-dd-action-name') || '').trim().toLowerCase();
+    const name = String(el.getAttribute?.('name') || '').trim().toLowerCase();
+    const value = String(el.getAttribute?.('value') || '').trim();
+    const text = getActionText(el);
+    return (
+      ddActionName === 'select existing session'
+      || (name === 'session_id' && Boolean(value))
+      || (/选择帐户|选择账户|select\s+account|欢迎回来|welcome\s+back/i.test(text) && Boolean(value))
+    );
+  }) || null;
+}
+
+function isChooseAccountPageReady() {
+  const path = `${location.pathname || ''} ${location.href || ''}`;
+  const pageText = getPageTextSnapshot();
+  if (/\/choose-an-account(?:[/?#]|$)/i.test(path) && findChooseAccountExistingSessionButton({ allowDisabled: true })) {
+    return true;
+  }
+  return /欢迎回来|welcome\s+back|选择一个帐户以继续|选择一个账户以继续|choose\s+an?\s+account\s+to\s+continue/i.test(pageText)
+    && Boolean(findChooseAccountExistingSessionButton({ allowDisabled: true }));
+}
+
 function inspectLoginAuthState() {
   const retryState = getLoginTimeoutErrorPageState();
   const verificationTarget = getVerificationCodeTarget();
   const passwordInput = getLoginPasswordInput();
   const emailInput = getLoginEmailInput();
   const phoneInput = getLoginPhoneInput();
+  const existingSessionButton = findChooseAccountExistingSessionButton({ allowDisabled: true });
   const switchTrigger = findOneTimeCodeLoginTrigger();
   const loginEntryTrigger = findLoginEntryTrigger();
   const phoneEntryTrigger = findLoginPhoneEntryTrigger();
@@ -4193,9 +4320,15 @@ function inspectLoginAuthState() {
   const verificationVisible = isVerificationPageStillVisible();
   const addPhonePage = isAddPhonePageReady();
   const addEmailPage = isAddEmailPageReady();
+  const addPhoneDelivery = addPhonePage
+    ? (phoneAuthHelpers.getAddPhoneDeliveryInfo?.() || { channel: '', text: '', candidates: [] })
+    : { channel: '', text: '', candidates: [] };
   const phoneVerificationPage = isPhoneVerificationPageReady();
   const consentReady = isStep8Ready();
   const oauthConsentPage = isOAuthConsentPage();
+  const phoneVerificationDelivery = phoneVerificationPage
+    ? (phoneAuthHelpers.getPhoneVerificationDeliveryInfo?.() || { channel: '', text: '', candidates: [] })
+    : { channel: '', text: '', candidates: [] };
   const baseState = {
     state: 'unknown',
     url: location.href,
@@ -4211,6 +4344,7 @@ function inspectLoginAuthState() {
     passwordInput,
     emailInput,
     phoneInput,
+    existingSessionButton,
     submitButton,
     switchTrigger,
     loginEntryTrigger,
@@ -4218,8 +4352,14 @@ function inspectLoginAuthState() {
     moreOptionsTrigger,
     verificationVisible,
     addPhonePage,
+    addPhoneDeliveryChannel: addPhoneDelivery.channel || '',
+    addPhoneDeliveryText: addPhoneDelivery.text || '',
+    addPhoneWhatsApp: addPhoneDelivery.channel === 'whatsapp',
     addEmailPage,
     phoneVerificationPage,
+    phoneVerificationDeliveryChannel: phoneVerificationDelivery.channel || '',
+    phoneVerificationDeliveryText: phoneVerificationDelivery.text || '',
+    phoneVerificationWhatsApp: phoneVerificationDelivery.channel === 'whatsapp',
     oauthConsentPage,
     consentReady,
   };
@@ -4236,6 +4376,9 @@ function inspectLoginAuthState() {
       ...baseState,
       state: 'phone_verification_page',
       displayedPhone: getPhoneVerificationDisplayedPhone(),
+      phoneVerificationDeliveryCandidates: Array.isArray(phoneVerificationDelivery.candidates)
+        ? phoneVerificationDelivery.candidates
+        : [],
     };
   }
 
@@ -4250,6 +4393,9 @@ function inspectLoginAuthState() {
     return {
       ...baseState,
       state: 'add_phone_page',
+      addPhoneDeliveryCandidates: Array.isArray(addPhoneDelivery.candidates)
+        ? addPhoneDelivery.candidates
+        : [],
     };
   }
 
@@ -4257,6 +4403,13 @@ function inspectLoginAuthState() {
     return {
       ...baseState,
       state: 'add_email_page',
+    };
+  }
+
+  if (isChooseAccountPageReady()) {
+    return {
+      ...baseState,
+      state: 'choose_account_page',
     };
   }
 
@@ -4321,6 +4474,7 @@ function serializeLoginAuthState(snapshot) {
     hasPasswordInput: Boolean(snapshot?.passwordInput),
     hasEmailInput: Boolean(snapshot?.emailInput),
     hasPhoneInput: Boolean(snapshot?.phoneInput),
+    hasExistingSessionButton: Boolean(snapshot?.existingSessionButton),
     hasSubmitButton: Boolean(snapshot?.submitButton),
     hasSwitchTrigger: Boolean(snapshot?.switchTrigger),
     hasLoginEntryTrigger: Boolean(snapshot?.loginEntryTrigger),
@@ -4328,8 +4482,14 @@ function serializeLoginAuthState(snapshot) {
     hasMoreOptionsTrigger: Boolean(snapshot?.moreOptionsTrigger),
     verificationVisible: Boolean(snapshot?.verificationVisible),
     addPhonePage: Boolean(snapshot?.addPhonePage),
+    addPhoneDeliveryChannel: String(snapshot?.addPhoneDeliveryChannel || '').trim(),
+    addPhoneDeliveryText: String(snapshot?.addPhoneDeliveryText || '').trim(),
+    addPhoneWhatsApp: Boolean(snapshot?.addPhoneWhatsApp),
     addEmailPage: Boolean(snapshot?.addEmailPage),
     phoneVerificationPage: Boolean(snapshot?.phoneVerificationPage),
+    phoneVerificationDeliveryChannel: String(snapshot?.phoneVerificationDeliveryChannel || '').trim(),
+    phoneVerificationDeliveryText: String(snapshot?.phoneVerificationDeliveryText || '').trim(),
+    phoneVerificationWhatsApp: Boolean(snapshot?.phoneVerificationWhatsApp),
     oauthConsentPage: Boolean(snapshot?.oauthConsentPage),
     consentReady: Boolean(snapshot?.consentReady),
   };
@@ -4358,6 +4518,8 @@ function getLoginAuthStateLabel(snapshot) {
       return '手机号页';
     case 'add_email_page':
       return '添加邮箱页';
+    case 'choose_account_page':
+      return '已有账号选择页';
     default:
       return '未知页面';
   }
@@ -4445,6 +4607,18 @@ function createStep6AddEmailSuccessResult(snapshot, options = {}) {
   };
 }
 
+function createStep6AddPhoneSuccessResult(snapshot, options = {}) {
+  return {
+    ...createStep6SuccessResult(snapshot, {
+      ...options,
+      via: options.via || 'add_phone_page',
+      loginVerificationRequestedAt: null,
+      skipLoginVerificationStep: true,
+    }),
+    addPhonePage: true,
+  };
+}
+
 function createStep6RecoverableResult(reason, snapshot, options = {}) {
   return {
     step6Outcome: 'recoverable',
@@ -4513,6 +4687,15 @@ async function createStep6LoginTimeoutRecoveryTransition(reason, snapshot, messa
       action: 'done',
       result: createStep6AddEmailSuccessResult(resolvedSnapshot, {
         via: `${via}_add_email`,
+      }),
+    };
+  }
+
+  if (resolvedSnapshot.state === 'add_phone_page') {
+    return {
+      action: 'done',
+      result: createStep6AddPhoneSuccessResult(resolvedSnapshot, {
+        via: `${via}_add_phone`,
       }),
     };
   }
@@ -5467,9 +5650,12 @@ async function resolveStep6PostSubmitSnapshot(snapshot, options = {}) {
   }
 
   if (normalizedSnapshot.state === 'add_phone_page') {
-    const message = getStep6OptionMessage(addPhoneMessage, normalizedSnapshot)
-      || `登录提交后页面进入手机号页面。URL: ${normalizedSnapshot.url || location.href}`;
-    throw new Error(message);
+    return {
+      action: 'done',
+      result: createStep6AddPhoneSuccessResult(normalizedSnapshot, {
+        via: `${via}_add_phone`,
+      }),
+    };
   }
 
   return null;
@@ -5601,6 +5787,101 @@ async function waitForLoginEntryOpenTransition(timeout = 10000) {
   return snapshot;
 }
 
+async function waitForChooseAccountTransition(timeout = 12000) {
+  const start = Date.now();
+  let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
+    if (snapshot.state !== 'unknown' && snapshot.state !== 'choose_account_page') {
+      return snapshot;
+    }
+    await sleep(250);
+  }
+
+  return snapshot;
+}
+
+async function step6ChooseExistingAccount(payload, snapshot) {
+  const performOperationWithDelay = typeof getOperationDelayRunner === 'function'
+    ? getOperationDelayRunner()
+    : async (metadata, operation) => {
+        const rootScope = typeof window !== 'undefined' ? window : globalThis;
+        const gate = rootScope?.CodexOperationDelay?.performOperationWithDelay;
+        return typeof gate === 'function' ? gate(metadata, operation) : operation();
+      };
+  const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 7;
+  const currentSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+  const existingSessionButton = currentSnapshot.existingSessionButton || findChooseAccountExistingSessionButton();
+  if (!existingSessionButton || !isActionEnabled(existingSessionButton)) {
+    return createStep6RecoverableResult('missing_existing_session_button', currentSnapshot, {
+      message: '当前已有账号选择页没有可点击的账号按钮。',
+    });
+  }
+
+  log('检测到已有账号选择页，优先点击已有账号继续登录。', 'info', { step: visibleStep, stepKey: 'oauth-login' });
+  await humanPause(350, 900);
+  await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: 'select-existing-session' }, async () => {
+    simulateClick(existingSessionButton);
+  });
+
+  const nextSnapshot = normalizeStep6Snapshot(await waitForChooseAccountTransition(15000));
+  if (nextSnapshot.state === 'verification_page' || nextSnapshot.state === 'phone_verification_page') {
+    return finalizeStep6VerificationReady({
+      visibleStep,
+      loginVerificationRequestedAt: null,
+      via: nextSnapshot.state === 'phone_verification_page'
+        ? 'choose_account_phone_verification_page'
+        : 'choose_account_verification_page',
+      allowPhoneVerificationPage: nextSnapshot.state === 'phone_verification_page',
+    });
+  }
+  if (nextSnapshot.state === 'oauth_consent_page') {
+    return createStep6OAuthConsentSuccessResult(nextSnapshot, {
+      via: 'choose_account_oauth_consent_page',
+    });
+  }
+  if (nextSnapshot.state === 'add_email_page') {
+    return createStep6AddEmailSuccessResult(nextSnapshot, {
+      via: 'choose_account_add_email_page',
+    });
+  }
+  if (nextSnapshot.state === 'add_phone_page') {
+    return createStep6AddPhoneSuccessResult(nextSnapshot, {
+      via: 'choose_account_add_phone_page',
+    });
+  }
+  if (nextSnapshot.state === 'login_timeout_error_page') {
+    const transition = await createStep6LoginTimeoutRecoveryTransition(
+      'choose_account_login_timeout',
+      nextSnapshot,
+      '点击已有账号后进入登录超时报错页。',
+      { visibleStep, loginVerificationRequestedAt: null }
+    );
+    if (transition.action === 'done') return transition.result;
+    if (transition.action === 'phone') return step6LoginFromPhonePage(payload, transition.snapshot);
+    if (transition.action === 'email') return step6LoginFromEmailPage(payload, transition.snapshot);
+    if (transition.action === 'password') return step6LoginFromPasswordPage(payload, transition.snapshot);
+    return transition.result;
+  }
+  if (nextSnapshot.state === 'email_page') {
+    return step6LoginFromEmailPage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'phone_entry_page') {
+    return step6LoginFromPhonePage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'password_page') {
+    return step6LoginFromPasswordPage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'entry_page') {
+    return step6OpenLoginEntry(payload, nextSnapshot);
+  }
+  return createStep6RecoverableResult('choose_account_stalled', nextSnapshot, {
+    message: '点击已有账号后仍未进入验证码页、绑定邮箱页或 OAuth 授权页。',
+  });
+}
+
 async function waitForPhoneLoginEntrySwitchTransition(timeout = 10000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
@@ -5665,6 +5946,14 @@ async function step6OpenLoginEntry(payload, snapshot) {
       via: 'entry_open_verification_page',
     });
   }
+  if (nextSnapshot.state === 'phone_verification_page') {
+    return finalizeStep6VerificationReady({
+      visibleStep,
+      loginVerificationRequestedAt: null,
+      via: 'entry_open_phone_verification_page',
+      allowPhoneVerificationPage: true,
+    });
+  }
   if (nextSnapshot.state === 'oauth_consent_page') {
     return createStep6OAuthConsentSuccessResult(nextSnapshot, {
       via: 'entry_open_oauth_consent_page',
@@ -5673,6 +5962,11 @@ async function step6OpenLoginEntry(payload, snapshot) {
   if (nextSnapshot.state === 'add_email_page') {
     return createStep6AddEmailSuccessResult(nextSnapshot, {
       via: 'entry_open_add_email_page',
+    });
+  }
+  if (nextSnapshot.state === 'add_phone_page') {
+    return createStep6AddPhoneSuccessResult(nextSnapshot, {
+      via: 'entry_open_add_phone_page',
     });
   }
   if (nextSnapshot.state === 'login_timeout_error_page') {
@@ -5925,6 +6219,11 @@ async function switchFromEmailPageToPhoneLogin(payload, snapshot) {
       via: 'phone_entry_switch_add_email_page',
     });
   }
+  if (nextSnapshot.state === 'add_phone_page') {
+    return createStep6AddPhoneSuccessResult(nextSnapshot, {
+      via: 'phone_entry_switch_add_phone_page',
+    });
+  }
   if (nextSnapshot.state === 'login_timeout_error_page') {
     const transition = await createStep6LoginTimeoutRecoveryTransition(
       'login_timeout_after_phone_entry_switch',
@@ -6122,6 +6421,13 @@ async function step6_login(payload) {
     });
   }
 
+  if (snapshot.state === 'add_phone_page') {
+    log('认证页已在手机号页，登录阶段完成，后续交给手机号验证步骤处理。', 'ok', { step: visibleStep, stepKey: 'oauth-login' });
+    return createStep6AddPhoneSuccessResult(snapshot, {
+      via: 'already_on_add_phone_page',
+    });
+  }
+
   if (snapshot.state === 'login_timeout_error_page') {
     log('检测到登录超时报错页，先尝试恢复当前页面。', 'warn', { step: visibleStep, stepKey: 'oauth-login' });
     const transition = await createStep6LoginTimeoutRecoveryTransition(
@@ -6177,6 +6483,10 @@ async function step6_login(payload) {
 
   if (snapshot.state === 'entry_page') {
     return step6OpenLoginEntry(payload, snapshot);
+  }
+
+  if (snapshot.state === 'choose_account_page') {
+    return step6ChooseExistingAccount(payload, snapshot);
   }
 
   throwForStep6FatalState(snapshot, visibleStep);
@@ -6326,7 +6636,21 @@ async function step8_findAndClick(payload = {}) {
   const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 9;
   log('正在查找 OAuth 同意页的“继续”按钮...', 'info', { step: visibleStep, stepKey: 'confirm-oauth' });
 
-  const continueBtn = await prepareStep8ContinueButton();
+  let continueBtn = null;
+  try {
+    continueBtn = await prepareStep8ContinueButton();
+  } catch (error) {
+    const pageState = getStep8State();
+    if (pageState?.verificationPage || pageState?.addEmailPage || pageState?.retryPage) {
+      return {
+        recoverableAuthFallback: true,
+        pageState,
+        error: error?.message || String(error || 'OAuth 同意页已回流'),
+        url: location.href,
+      };
+    }
+    throw error;
+  }
 
   const rect = getSerializableRect(continueBtn);
   log('已找到“继续”按钮并准备好调试器点击坐标。', 'info', { step: visibleStep, stepKey: 'confirm-oauth' });
@@ -6338,16 +6662,32 @@ async function step8_findAndClick(payload = {}) {
 }
 
 function getStep8State() {
+  const authSnapshot = inspectLoginAuthState();
   const continueBtn = getPrimaryContinueButton();
   const retryState = getCurrentAuthRetryPageState('auth');
+  const addPhoneDelivery = isAddPhonePageReady()
+    ? (phoneAuthHelpers.getAddPhoneDeliveryInfo?.() || { channel: '', text: '' })
+    : { channel: '', text: '' };
+  const phoneVerificationDelivery = isPhoneVerificationPageReady()
+    ? (phoneAuthHelpers.getPhoneVerificationDeliveryInfo?.() || { channel: '', text: '' })
+    : { channel: '', text: '' };
   const state = {
+    state: String(authSnapshot?.state || 'unknown').trim() || 'unknown',
     url: location.href,
     consentPage: isOAuthConsentPage(),
     consentReady: isStep8Ready(),
     verificationPage: isVerificationPageStillVisible(),
+    displayedEmail: String(authSnapshot?.displayedEmail || '').trim(),
+    verificationTarget: authSnapshot?.verificationTarget || null,
     addPhonePage: isAddPhonePageReady(),
+    addPhoneDeliveryChannel: addPhoneDelivery.channel || '',
+    addPhoneDeliveryText: addPhoneDelivery.text || '',
+    addPhoneWhatsApp: addPhoneDelivery.channel === 'whatsapp',
     addEmailPage: isAddEmailPageReady(),
     phoneVerificationPage: isPhoneVerificationPageReady(),
+    phoneVerificationDeliveryChannel: phoneVerificationDelivery.channel || '',
+    phoneVerificationDeliveryText: phoneVerificationDelivery.text || '',
+    phoneVerificationWhatsApp: phoneVerificationDelivery.channel === 'whatsapp',
     retryPage: Boolean(retryState),
     retryEnabled: Boolean(retryState?.retryEnabled),
     retryTitleMatched: Boolean(retryState?.titleMatched),
@@ -6372,10 +6712,24 @@ function getStep8State() {
 async function step8_triggerContinue(payload = {}) {
   const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 9;
   const strategy = payload?.strategy || 'requestSubmit';
-  const continueBtn = await prepareStep8ContinueButton({
-    findTimeoutMs: payload?.findTimeoutMs,
-    enabledTimeoutMs: payload?.enabledTimeoutMs,
-  });
+  let continueBtn = null;
+  try {
+    continueBtn = await prepareStep8ContinueButton({
+      findTimeoutMs: payload?.findTimeoutMs,
+      enabledTimeoutMs: payload?.enabledTimeoutMs,
+    });
+  } catch (error) {
+    const pageState = getStep8State();
+    if (pageState?.verificationPage || pageState?.addEmailPage || pageState?.retryPage) {
+      return {
+        recoverableAuthFallback: true,
+        pageState,
+        error: error?.message || String(error || 'OAuth 同意页已回流'),
+        url: location.href,
+      };
+    }
+    throw error;
+  }
   const form = continueBtn.form || continueBtn.closest('form');
 
   switch (strategy) {
@@ -6729,6 +7083,10 @@ function getStep5PostSubmitSuccessState() {
     return null;
   }
 
+  if (getCreateAccountEnrollPasskeyPageState()) {
+    return null;
+  }
+
   if (isLikelyLoggedInChatgptHomeUrl()) {
     return {
       state: 'logged_in_home',
@@ -6772,6 +7130,7 @@ function getStep5PostSubmitSuccessState() {
 function getStep5SubmitState() {
   const retryState = getStep5AuthRetryPageState();
   const successState = getStep5PostSubmitSuccessState();
+  const passkeyState = getCreateAccountEnrollPasskeyPageState();
   const errorText = typeof getStep5ErrorText === 'function' ? getStep5ErrorText() : '';
   let signupAuthHost = false;
   try {
@@ -6789,12 +7148,15 @@ function getStep5SubmitState() {
     maxCheckAttemptsBlocked: Boolean(retryState?.maxCheckAttemptsBlocked),
     userAlreadyExistsBlocked: Boolean(retryState?.userAlreadyExistsBlocked),
     successState: successState?.state || '',
+    passkeyEnrollPage: Boolean(passkeyState),
+    passkeySkipEnabled: Boolean(passkeyState?.skipEnabled),
     profileVisible: isStep5ProfileStillVisible(),
     errorText,
     unknownAuthPage: Boolean(
       signupAuthHost
       && !retryState
       && !successState
+      && !passkeyState
       && !isStep5ProfileStillVisible()
     ),
   };
@@ -6840,11 +7202,13 @@ async function waitForStep5SubmitOutcome(options = {}) {
   const {
     timeoutMs = 120000,
     maxAuthRetryRecoveries = 2,
+    maxPasskeySkipAttempts = 2,
     maxSubmitClicks = 3,
     retryClickIntervalMs = 3500,
   } = options;
   const start = Date.now();
   let authRetryRecoveryCount = 0;
+  let passkeySkipCount = 0;
   let submitClickCount = 1;
   let lastSubmitClickAt = Date.now();
   let lastStep5Error = '';
@@ -6872,6 +7236,21 @@ async function waitForStep5SubmitOutcome(options = {}) {
         pathPatterns: getStep5AuthRetryPathPatterns(),
         step: 5,
         timeoutMs: 12000,
+      });
+      lastSubmitClickAt = Date.now();
+      continue;
+    }
+
+    const passkeyState = getCreateAccountEnrollPasskeyPageState();
+    if (passkeyState) {
+      if (passkeySkipCount >= maxPasskeySkipAttempts) {
+        throw new Error(`步骤 5：资料提交后连续进入通行密钥页 ${maxPasskeySkipAttempts} 次，页面仍未继续。URL: ${location.href}`);
+      }
+      passkeySkipCount += 1;
+      log(`步骤 5：资料提交后进入通行密钥页，正在自动点击“跳过”（${passkeySkipCount}/${maxPasskeySkipAttempts}）...`, 'warn');
+      await skipCreateAccountEnrollPasskey({
+        timeoutMs: 15000,
+        settleMs: 1200,
       });
       lastSubmitClickAt = Date.now();
       continue;

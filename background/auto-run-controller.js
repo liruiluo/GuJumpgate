@@ -1,6 +1,9 @@
 (function attachBackgroundAutoRunController(root, factory) {
   root.MultiPageBackgroundAutoRunController = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundAutoRunControllerModule() {
+  const AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND = 10;
+  const KEEP_SAME_EMAIL_RETRY_LIMIT_EXCEEDED_ERROR_PREFIX = 'KEEP_SAME_EMAIL_RETRY_LIMIT_EXCEEDED::';
+
   function createAutoRunController(deps = {}) {
     const {
       addLog,
@@ -425,7 +428,9 @@
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
       });
-      clearStopRequest();
+      if (!isStopError(error)) {
+        clearStopRequest();
+      }
     }
 
     function startAutoRunLoop(totalRuns, options = {}) {
@@ -517,9 +522,10 @@
         let reuseExistingProgress = resumingCurrentRound;
         const currentRoundState = await getState();
         const keepSameEmailUntilAddPhone = autoRunSkipFailures && shouldKeepCustomMailProviderPoolEmail(currentRoundState);
+        const maxKeepSameEmailAttemptsForRound = AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND + 1;
         const maxAttemptsForRound = autoRunSkipFailures || autoRunRetryNonFreeTrial || autoRunRetryPaypalCallback
-          ? (keepSameEmailUntilAddPhone ? Number.MAX_SAFE_INTEGER : AUTO_RUN_MAX_RETRIES_PER_ROUND + 1)
-          : Math.max(1, attemptRun);
+          ? (keepSameEmailUntilAddPhone ? maxKeepSameEmailAttemptsForRound : AUTO_RUN_MAX_RETRIES_PER_ROUND + 1)
+          : Math.max(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, attemptRun);
 
         while (attemptRun <= maxAttemptsForRound) {
           runtime.set({
@@ -564,6 +570,13 @@
               hostedCheckoutPhoneNumber: prevState.hostedCheckoutPhoneNumber,
               hostedCheckoutSmsPoolText: prevState.hostedCheckoutSmsPoolText,
               hostedCheckoutSmsPoolUsage: prevState.hostedCheckoutSmsPoolUsage,
+              hostedCheckoutSmsPoolAutoDisableEnabled: prevState.hostedCheckoutSmsPoolAutoDisableEnabled,
+              hostedCheckoutFirstDirectResendEnabled: prevState.hostedCheckoutFirstDirectResendEnabled,
+              hostedCheckoutFirstResendWaitSeconds: prevState.hostedCheckoutFirstResendWaitSeconds,
+              hostedCheckoutSubsequentResendWaitSeconds: prevState.hostedCheckoutSubsequentResendWaitSeconds,
+              hostedCheckoutVerificationResendMaxAttempts: prevState.hostedCheckoutVerificationResendMaxAttempts,
+              hostedCheckoutVerificationPollAttempts: prevState.hostedCheckoutVerificationPollAttempts,
+              hostedCheckoutVerificationPollIntervalSeconds: prevState.hostedCheckoutVerificationPollIntervalSeconds,
               paypalEmail: prevState.paypalEmail,
               paypalPassword: prevState.paypalPassword,
               paypalAccounts: prevState.paypalAccounts,
@@ -697,6 +710,9 @@
             const blockedByHostedCheckoutGenericError = typeof isHostedCheckoutGenericErrorFailure === 'function'
               ? isHostedCheckoutGenericErrorFailure(err)
               : /HOSTED_CHECKOUT_GENERIC_ERROR::/i.test(err?.message || String(err || ''));
+            const blockedByHostedCheckoutCardFallback = typeof isHostedCheckoutCardFallbackFailure === 'function'
+              ? isHostedCheckoutCardFallbackFailure(err)
+              : /HOSTED_CHECKOUT_CARD_FALLBACK::/i.test(err?.message || String(err || ''));
             const blockedByHostedCheckoutVerificationResendLimit = typeof isHostedCheckoutVerificationResendLimitFailure === 'function'
               ? isHostedCheckoutVerificationResendLimitFailure(err)
               : /HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::/i.test(err?.message || String(err || ''));
@@ -715,16 +731,32 @@
             const retryableHostedCheckoutGenericError = blockedByHostedCheckoutGenericError
               && autoRunRetryPaypalCallback
               && attemptRun < maxPlusNonFreeTrialAttempts;
+            const retryableHostedCheckoutCardFallback = blockedByHostedCheckoutCardFallback
+              && attemptRun < maxPlusNonFreeTrialAttempts;
             const canRetry = !blockedByAddPhone
               && !blockedByPhoneNoSupply
               && !blockedByPlusNonFreeTrial
               && !blockedByGpcTaskEnded
               && !blockedByHostedCheckoutGenericError
+              && !blockedByHostedCheckoutCardFallback
               && !blockedByHostedCheckoutVerificationResendLimit
               && !blockedByCloudCheckoutAlreadyPaid
               && !blockedBySignupUserAlreadyExists
               && autoRunSkipFailures
               && attemptRun < maxAttemptsForRound;
+            const reachedKeepSameEmailRetryLimit = keepSameEmailUntilAddPhone
+              && !blockedByAddPhone
+              && !blockedByPhoneNoSupply
+              && !blockedByPlusNonFreeTrial
+              && !blockedByGpcTaskEnded
+              && !blockedByHostedCheckoutGenericError
+              && !blockedByHostedCheckoutCardFallback
+              && !blockedByHostedCheckoutVerificationResendLimit
+              && !blockedByCloudCheckoutAlreadyPaid
+              && !blockedBySignupUserAlreadyExists
+              && !blockedByStep4Route405
+              && autoRunSkipFailures
+              && attemptRun >= maxAttemptsForRound;
 
             await setState({
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
@@ -858,6 +890,70 @@
               continue;
             }
 
+            if (retryableHostedCheckoutCardFallback) {
+              const retryIndex = attemptRun;
+              await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试落到银行卡分支：${reason}`, 'warn');
+              cancelPendingCommands('当前尝试因 hosted checkout 落到银行卡分支已放弃。');
+              await broadcastStopToContentScripts();
+              await broadcastAutoRunStatus('retrying', {
+                currentRun: targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId,
+              });
+              forceFreshTabsNextRun = true;
+              await addLog(
+                `hosted checkout 银行卡分支默认自动重试：${Math.round(AUTO_RUN_RETRY_DELAY_MS / 1000)} 秒后换新邮箱，开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试（第 ${retryIndex}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次重试）。`,
+                'warn'
+              );
+              try {
+                await sleepWithStop(AUTO_RUN_RETRY_DELAY_MS);
+              } catch (sleepError) {
+                if (isStopError(sleepError)) {
+                  stoppedEarly = true;
+                  await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
+                  await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                  await broadcastAutoRunStatus('stopped', {
+                    currentRun: targetRun,
+                    totalRuns,
+                    attemptRun,
+                    sessionId: 0,
+                  });
+                  break;
+                }
+                throw sleepError;
+              }
+              try {
+                const parkedForRetry = await waitBeforeAutoRunRetry(targetRun, totalRuns, attemptRun + 1, {
+                  autoRunSkipFailures,
+                  autoRunRetryNonFreeTrial,
+                  autoRunRetryPaypalCallback,
+                  roundSummaries,
+                });
+                if (parkedForRetry) {
+                  parkedByTimer = true;
+                  break;
+                }
+              } catch (sleepError) {
+                if (isStopError(sleepError)) {
+                  stoppedEarly = true;
+                  await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
+                  await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                  await broadcastAutoRunStatus('stopped', {
+                    currentRun: targetRun,
+                    totalRuns,
+                    attemptRun,
+                    sessionId: 0,
+                  });
+                  break;
+                }
+                throw sleepError;
+              }
+              attemptRun += 1;
+              reuseExistingProgress = false;
+              continue;
+            }
+
             if (blockedByAddPhone) {
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
@@ -902,29 +998,19 @@
               await appendRoundRecordIfNeeded('failed', reason, err);
               cancelPendingCommands('当前轮因接码号池暂无可用号码已终止。');
               await broadcastStopToContentScripts();
-              if (!autoRunSkipFailures) {
-                await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，自动重试未开启，当前自动运行将停止。`,
-                  'warn'
-                );
-                stoppedEarly = true;
-                await broadcastAutoRunStatus('stopped', {
-                  currentRun: targetRun,
-                  totalRuns,
-                  attemptRun,
-                  sessionId: 0,
-                });
-                break;
-              }
-
-              await addLog(`第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
-                targetRun < totalRuns
-                  ? `第 ${targetRun}/${totalRuns} 轮因接码号池暂无可用号码提前结束，自动流程将继续下一轮。`
-                  : `第 ${targetRun}/${totalRuns} 轮因接码号池暂无可用号码提前结束，已无后续轮次，本次自动运行结束。`,
+                autoRunSkipFailures
+                  ? `第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码。该状态属于全局资源耗尽，已忽略“自动重试/跳过失败继续下一轮”并停止自动运行。`
+                  : `第 ${targetRun}/${totalRuns} 轮接码号池暂无可用号码，当前自动运行将停止。`,
                 'warn'
               );
-              forceFreshTabsNextRun = true;
+              stoppedEarly = true;
+              await broadcastAutoRunStatus('stopped', {
+                currentRun: targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId: 0,
+              });
               break;
             }
 
@@ -1017,6 +1103,29 @@
                 autoRunRetryPaypalCallback
                   ? `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，已达到 PAYPAL回调自动重试上限，当前自动运行将停止。`
                   : `第 ${targetRun}/${totalRuns} 轮检测到 PayPal Checkout genericError，当前自动运行已停止，请在弹窗中选择“检查”或“重试”。`,
+                'warn'
+              );
+              stoppedEarly = true;
+              await broadcastAutoRunStatus('stopped', {
+                currentRun: targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId: 0,
+              });
+              break;
+            }
+
+            if (blockedByHostedCheckoutCardFallback) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason, err);
+              cancelPendingCommands('当前轮因 hosted checkout 连续落到银行卡分支已终止。');
+              await broadcastStopToContentScripts();
+              await addLog(
+                `第 ${targetRun}/${totalRuns} 轮检测到 hosted checkout 连续落到银行卡分支，已达到默认自动重试上限，当前自动运行将停止。`,
                 'warn'
               );
               stoppedEarly = true;
@@ -1215,6 +1324,46 @@
               continue;
             }
 
+            if (reachedKeepSameEmailRetryLimit) {
+              const limitReason = `${KEEP_SAME_EMAIL_RETRY_LIMIT_EXCEEDED_ERROR_PREFIX}第 ${targetRun}/${totalRuns} 轮继续使用当前邮箱已重试 ${AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND} 次，停止当前轮次。最后原因：${reason}`;
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = limitReason;
+              roundSummary.failureReasons.push(limitReason);
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', limitReason, err);
+              cancelPendingCommands('当前轮继续使用同一邮箱重试已达到上限。');
+              await broadcastStopToContentScripts();
+              if (!autoRunSkipFailures) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮继续使用当前邮箱重试已达到 ${AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND} 次上限，当前自动运行将停止。`,
+                  'warn'
+                );
+                stoppedEarly = true;
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+
+              await addLog(
+                `第 ${targetRun}/${totalRuns} 轮继续使用当前邮箱重试已达到 ${AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND} 次上限，本轮将直接失败并跳过剩余重试。`,
+                'warn'
+              );
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因同邮箱重试达到上限提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因同邮箱重试达到上限提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
             roundSummary.status = 'failed';
             roundSummary.finalFailureReason = reason;
             await setState({
@@ -1325,7 +1474,9 @@
           sessionId: 0,
         }),
       });
-      clearStopRequest();
+      if (!(deps.getStopRequested() || stoppedEarly)) {
+        clearStopRequest();
+      }
     }
 
     return {
@@ -1343,6 +1494,10 @@
       startAutoRunLoop,
       waitBetweenAutoRunRounds,
       waitBeforeAutoRunRetry,
+      __test: {
+        AUTO_RUN_MAX_KEEP_SAME_EMAIL_RETRIES_PER_ROUND,
+        KEEP_SAME_EMAIL_RETRY_LIMIT_EXCEEDED_ERROR_PREFIX,
+      },
     };
   }
 

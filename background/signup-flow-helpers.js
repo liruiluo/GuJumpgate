@@ -340,12 +340,15 @@
     }
 
     async function resolveSignupEmailForFlow(state, options = {}) {
-      let resolvedEmail = state.email;
+      const ignoreCurrentEmail = Boolean(options?.ignoreCurrentEmail);
+      let resolvedEmail = ignoreCurrentEmail ? '' : state.email;
       let generatedEmailAlreadyPersisted = false;
       if (isHotmailProvider(state)) {
+        const preserveAccountIdentity = Boolean(options?.preserveAccountIdentity);
         const account = await ensureHotmailAccountForFlow({
           allowAllocate: true,
-          markUsed: true,
+          allowUsedCurrent: preserveAccountIdentity,
+          markUsed: !preserveAccountIdentity,
           preferredAccountId: state.currentHotmailAccountId || null,
         });
         resolvedEmail = account.registrationAliasEmail || account.email;

@@ -392,6 +392,11 @@
       return /whats\s*app/i.test(normalizeInlineText(value));
     }
 
+    function isMixedSmsWhatsAppChannelSelectorText(value) {
+      const text = normalizeInlineText(value);
+      return Boolean(text && isSmsChannelText(text) && isWhatsAppChannelText(text));
+    }
+
     function getAddPhoneChannelInput() {
       const form = getAddPhoneForm();
       if (!form) {
@@ -630,6 +635,7 @@
       const pageLevelWhatsAppText = candidates.find((text) => (
         /whats\s*app/i.test(text)
         && /(?:verification\s+code|one[-\s]*time\s+code|验证码|一次性验证码)/i.test(text)
+        && !isMixedSmsWhatsAppChannelSelectorText(text)
       )) || '';
       const smsDeliveryText = candidates.find((text) => (
         /(?:sms|text\s*message|短信)/i.test(text)

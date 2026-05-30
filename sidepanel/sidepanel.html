@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GuJumpgate  V0.1.6</title>
+  <title>GuJumpgate  V0.1.7</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -25,7 +25,7 @@
       <div class="header-version-block">
         <div class="header-version-main">
           <button id="extension-update-status" class="header-version-title header-version-link" type="button"
-          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate  V0.1.6</button>
+          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate  V0.1.7</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -300,7 +300,19 @@
               </span>
             </label>
           </div>
-          <span class="setting-caption">已固定开启</span>
+          <div class="setting-group setting-group-secondary plus-checkout-mode-switch-group" id="plus-checkout-mode-switch-group">
+            <span class="setting-caption plus-checkout-mode-switch-caption">已固定开启</span>
+            <div class="plus-checkout-mode-switch" role="radiogroup" aria-label="Plus Checkout 模式切换">
+              <label class="plus-checkout-mode-option" for="input-plus-checkout-mode-us">
+                <input type="radio" name="plus-checkout-mode" id="input-plus-checkout-mode-us" value="us_pp" checked />
+                <span>美区PP Plus Checkout</span>
+              </label>
+              <label class="plus-checkout-mode-option" for="input-plus-checkout-mode-jp">
+                <input type="radio" name="plus-checkout-mode" id="input-plus-checkout-mode-jp" value="jp_pp" />
+                <span>日区PP Plus Checkout</span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
       <div class="data-row" id="row-plus-payment-method" style="display:none;">

@@ -117,6 +117,21 @@
       }
     }
 
+    async function syncHotmailStateFromBackground() {
+      const snapshot = await runtime.sendMessage({
+        type: 'GET_STATE',
+        source: 'sidepanel',
+      });
+      const snapshotState = snapshot?.state && typeof snapshot.state === 'object'
+        ? snapshot.state
+        : snapshot;
+      if (snapshotState && typeof snapshotState === 'object') {
+        state.syncLatestState(snapshotState);
+      }
+      refreshHotmailSelectionUI();
+      return snapshotState;
+    }
+
     function applyHotmailAccountMutation(account, options = {}) {
       if (!account?.id) return;
       const { preserveCurrentSelection = false } = options;
@@ -317,6 +332,7 @@
         throw new Error(response.error);
       }
 
+      await syncHotmailStateFromBackground();
       const latestState = state.getLatestState();
       const targetIds = new Set(targetAccounts.map((account) => account.id));
       const nextAccounts = isUsedMode
@@ -379,6 +395,7 @@
           throw new Error(response.error);
         }
 
+        await syncHotmailStateFromBackground();
         helpers.showToast(`已保存 Hotmail 账号 ${email}`, 'success', 1800);
         formController.setVisible(false, { clearForm: true });
       } catch (err) {
@@ -421,8 +438,12 @@
           if (response?.error) {
             throw new Error(response.error);
           }
+          if (response?.account) {
+            applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
+          }
         }
 
+        await syncHotmailStateFromBackground();
         dom.inputHotmailImport.value = '';
         helpers.showToast(`已导入 ${parsedAccounts.length} 条 Hotmail 账号`, 'success', 2200);
       } catch (err) {
@@ -462,6 +483,7 @@
             payload: { accountId },
           });
           if (response?.error) throw new Error(response.error);
+          await syncHotmailStateFromBackground();
           state.syncLatestState({ currentHotmailAccountId: response.account.id });
           applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
           helpers.showToast(`已切换当前 Hotmail 账号为 ${response.account.email}`, 'success', 1800);
@@ -476,6 +498,7 @@
             },
           });
           if (response?.error) throw new Error(response.error);
+          await syncHotmailStateFromBackground();
           applyHotmailAccountMutation(response.account);
           helpers.showToast(`账号 ${response.account.email} 已${response.account.used ? '标记为已用' : '恢复为未用'}`, 'success', 2200);
         } else if (action === 'verify') {
@@ -485,6 +508,7 @@
             payload: { accountId },
           });
           if (response?.error) throw new Error(response.error);
+          await syncHotmailStateFromBackground();
           applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
           helpers.showToast(`账号 ${response.account.email} 校验通过`, 'success', 2200);
         } else if (action === 'test') {
@@ -494,6 +518,7 @@
             payload: { accountId },
           });
           if (response?.error) throw new Error(response.error);
+          await syncHotmailStateFromBackground();
           applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
           if (response.latestCode) {
             await helpers.copyTextToClipboard(response.latestCode);
@@ -521,6 +546,7 @@
             payload: { accountId },
           });
           if (response?.error) throw new Error(response.error);
+          await syncHotmailStateFromBackground();
           helpers.showToast('Hotmail 账号已删除', 'success', 1800);
         }
       } catch (err) {

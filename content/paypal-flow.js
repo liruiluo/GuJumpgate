@@ -393,6 +393,30 @@ function getHostedVerificationErrorText() {
   return alert && isVisibleElement(alert) ? normalizeText(alert.textContent || '') : '';
 }
 
+function hasHostedRecoverableBlankVerificationError() {
+  if (!hasHostedVerificationInputs()) {
+    return false;
+  }
+  const alerts = getVisibleControls('[role="alert"]');
+  if (!alerts.length) {
+    return false;
+  }
+  return alerts.some((alert) => {
+    if (!alert || !isVisibleElement(alert)) {
+      return false;
+    }
+    const text = normalizeText(alert.textContent || alert.innerText || '');
+    if (text && !/^(?:error|warning)$/i.test(text)) {
+      return false;
+    }
+    const verificationShell = alert.closest('[data-testid="sca-confirm-multi-field"]');
+    if (!verificationShell) {
+      return false;
+    }
+    return Boolean(findHostedVerificationResendButton());
+  });
+}
+
 function hasHostedInvalidVerificationCodeError() {
   return /check\s+the\s+code\s+and\s+try\s+again|(?:sorry,\s*)?something\s+went\s+wrong\.?\s*get\s+a\s+new\s+code|get\s+a\s+new\s+code/i.test(getHostedVerificationErrorText());
 }
@@ -480,6 +504,315 @@ function selectHostedOptionByIdText(id, text) {
   }
   select.value = match.value;
   select.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+const HOSTED_PAYPAL_JP_PREFECTURES = Object.freeze([
+  ['HOKKAIDO', 'Hokkaido', '北海道'],
+  ['AOMORI-KEN', 'Aomori', '青森県'],
+  ['IWATE-KEN', 'Iwate', '岩手県'],
+  ['MIYAGI-KEN', 'Miyagi', '宮城県'],
+  ['AKITA-KEN', 'Akita', '秋田県'],
+  ['YAMAGATA-KEN', 'Yamagata', '山形県'],
+  ['FUKUSHIMA-KEN', 'Fukushima', '福島県'],
+  ['IBARAKI-KEN', 'Ibaraki', '茨城県'],
+  ['TOCHIGI-KEN', 'Tochigi', '栃木県'],
+  ['GUNMA-KEN', 'Gunma', '群馬県'],
+  ['SAITAMA-KEN', 'Saitama', '埼玉県'],
+  ['CHIBA-KEN', 'Chiba', '千葉県'],
+  ['TOKYO-TO', 'Tokyo', '東京都'],
+  ['KANAGAWA-KEN', 'Kanagawa', '神奈川県'],
+  ['NIIGATA-KEN', 'Niigata', '新潟県'],
+  ['TOYAMA-KEN', 'Toyama', '富山県'],
+  ['ISHIKAWA-KEN', 'Ishikawa', '石川県'],
+  ['FUKUI-KEN', 'Fukui', '福井県'],
+  ['YAMANASHI-KEN', 'Yamanashi', '山梨県'],
+  ['NAGANO-KEN', 'Nagano', '長野県'],
+  ['GIFU-KEN', 'Gifu', '岐阜県'],
+  ['SHIZUOKA-KEN', 'Shizuoka', '静岡県'],
+  ['AICHI-KEN', 'Aichi', '愛知県'],
+  ['MIE-KEN', 'Mie', '三重県'],
+  ['SHIGA-KEN', 'Shiga', '滋賀県'],
+  ['KYOTO-FU', 'Kyoto', '京都府'],
+  ['OSAKA-FU', 'Osaka', '大阪府'],
+  ['HYOGO-KEN', 'Hyogo', '兵庫県'],
+  ['NARA-KEN', 'Nara', '奈良県'],
+  ['WAKAYAMA-KEN', 'Wakayama', '和歌山県'],
+  ['TOTTORI-KEN', 'Tottori', '鳥取県'],
+  ['SHIMANE-KEN', 'Shimane', '島根県'],
+  ['OKAYAMA-KEN', 'Okayama', '岡山県'],
+  ['HIROSHIMA-KEN', 'Hiroshima', '広島県'],
+  ['YAMAGUCHI-KEN', 'Yamaguchi', '山口県'],
+  ['TOKUSHIMA-KEN', 'Tokushima', '徳島県'],
+  ['KAGAWA-KEN', 'Kagawa', '香川県'],
+  ['EHIME-KEN', 'Ehime', '愛媛県'],
+  ['KOCHI-KEN', 'Kochi', '高知県'],
+  ['FUKUOKA-KEN', 'Fukuoka', '福岡県'],
+  ['SAGA-KEN', 'Saga', '佐賀県'],
+  ['NAGASAKI-KEN', 'Nagasaki', '長崎県'],
+  ['KUMAMOTO-KEN', 'Kumamoto', '熊本県'],
+  ['OITA-KEN', 'Oita', '大分県'],
+  ['MIYAZAKI-KEN', 'Miyazaki', '宮崎県'],
+  ['KAGOSHIMA-KEN', 'Kagoshima', '鹿児島県'],
+  ['OKINAWA-KEN', 'Okinawa', '沖縄県'],
+]);
+
+function compactHostedPrefectureText(value = '') {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+}
+
+function getHostedPayPalPrefectureCandidates(value = '') {
+  const raw = normalizeText(value);
+  if (!raw) {
+    return [];
+  }
+  const compact = compactHostedPrefectureText(raw);
+  const match = HOSTED_PAYPAL_JP_PREFECTURES.find(([paypalValue, english, japanese]) => {
+    return compact === compactHostedPrefectureText(paypalValue)
+      || compact === compactHostedPrefectureText(english)
+      || compact === compactHostedPrefectureText(japanese)
+      || compact.includes(compactHostedPrefectureText(english))
+      || compact.includes(compactHostedPrefectureText(japanese));
+  });
+  return Array.from(new Set([
+    raw,
+    ...(match ? match : []),
+  ].filter(Boolean)));
+}
+
+function fillHostedBillingState(address = {}) {
+  const select = document.getElementById('billingState');
+  if (!select || !isVisibleElement(select) || !isEnabledControl(select)) {
+    return false;
+  }
+  const candidates = [
+    address.prefecture,
+    address.stateFull,
+    address.State_Full,
+    address.state,
+    address.State,
+    address.city,
+    ...String(address.street || address.addressLine1 || '')
+      .split(',')
+      .map((part) => part.trim())
+      .reverse(),
+  ].flatMap(getHostedPayPalPrefectureCandidates);
+  const compactCandidates = new Set(candidates.map(compactHostedPrefectureText).filter(Boolean));
+  const match = Array.from(select.options || []).find((option) => {
+    const label = normalizeText(option?.textContent || option?.label || '');
+    const value = normalizeText(option?.value || '');
+    return compactCandidates.has(compactHostedPrefectureText(label))
+      || compactCandidates.has(compactHostedPrefectureText(value));
+  });
+  if (!match) {
+    return false;
+  }
+  select.value = match.value;
+  match.selected = true;
+  select.dispatchEvent(new Event('input', { bubbles: true }));
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+function normalizeHostedPayPalDateOfBirth(value = '') {
+  const raw = normalizeText(value);
+  const match = raw.match(/(\d{1,4})\D+(\d{1,2})\D+(\d{1,4})/);
+  if (!match) {
+    return '09/05/1976';
+  }
+  const first = Number.parseInt(match[1], 10);
+  const second = Number.parseInt(match[2], 10);
+  const third = Number.parseInt(match[3], 10);
+  const year = match[1].length === 4 ? first : third;
+  const month = match[1].length === 4 ? second : first;
+  const day = match[1].length === 4 ? third : second;
+  if (!Number.isFinite(year) || year < 1900 || year > 2008 || month < 1 || month > 12 || day < 1 || day > 31) {
+    return '09/05/1976';
+  }
+  return `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${String(year).padStart(4, '0')}`;
+}
+
+function normalizeHostedPayPalSignupPassword(value = '') {
+  const normalized = String(value || '').replace(/\s+/g, '').trim();
+  if (
+    normalized.length >= 8
+    && normalized.length <= 20
+    && /^[A-Za-z0-9!@#$%^]+$/.test(normalized)
+    && /[\d!@#$%^]/.test(normalized)
+  ) {
+    return normalized;
+  }
+  return buildHostedRandomPassword();
+}
+
+function normalizeHostedPayPalNamePart(value = '', fallback = '') {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  const compact = normalized.replace(/[^A-Za-z]/g, '').toUpperCase();
+  const blockedNameParts = new Set([
+    'ADMIN',
+    'CHATGPT',
+    'CUSTOMER',
+    'DEMO',
+    'FIRST',
+    'LAST',
+    'NAME',
+    'NONE',
+    'NULL',
+    'OPENAI',
+    'PAYPAL',
+    'PRD',
+    'PROD',
+    'PRODUCTION',
+    'SAMPLE',
+    'STRIPE',
+    'TEST',
+    'UNKNOWN',
+    'USER',
+  ]);
+  if (
+    /^[A-Za-z][A-Za-z\s'-]{1,98}$/.test(normalized)
+    && !blockedNameParts.has(compact)
+    && !(/^[A-Z]{3,6}$/.test(compact) && !/[AEIOUY]/.test(compact))
+  ) {
+    return normalized.replace(/\b[A-Z]{2,}\b/g, (part) => (
+      part.charAt(0) + part.slice(1).toLowerCase()
+    ));
+  }
+  return fallback;
+}
+
+function isHostedNationalityUnitedStates() {
+  const text = normalizeText(document.body?.innerText || '');
+  return /country of nationality is\s+United States/i.test(text);
+}
+
+function findHostedNationalityChangeButton() {
+  const direct = document.querySelector('#kycCountryChangeButton, button[data-testid="kycCountryChangeButton"]');
+  if (direct && isVisibleElement(direct) && isEnabledControl(direct)) {
+    return direct;
+  }
+  return getVisibleControls('button, [role="button"], [role="selection-menu-button"]').find((button) => {
+    const text = getActionText(button);
+    return /nationality|country/i.test(text) && /change|edit/i.test(text);
+  }) || null;
+}
+
+function findHostedUnitedStatesNationalityOption() {
+  const controls = getVisibleControls('button, [role="button"], [role="option"], li, div, span');
+  const match = controls.find((node) => {
+    if (!isEnabledControl(node)) {
+      return false;
+    }
+    const text = normalizeText(node.textContent || getActionText(node));
+    return /^United States$/i.test(text) || /^United States of America$/i.test(text) || /^US$/i.test(text);
+  }) || null;
+  return match?.closest?.('button, [role="option"], [role="button"], li') || match;
+}
+
+async function switchHostedNationalityToUnitedStatesIfNeeded(countryCode = '') {
+  if (String(countryCode || '').trim().toUpperCase() !== 'JP' || isHostedNationalityUnitedStates()) {
+    return false;
+  }
+  const button = findHostedNationalityChangeButton();
+  if (!button) {
+    return false;
+  }
+  log('PayPal guest checkout：日区页面切换国籍为 United States，避免日文姓名校验。', 'info');
+  simulateClick(button);
+  let option = null;
+  try {
+    option = await waitUntil(() => findHostedUnitedStatesNationalityOption(), {
+      intervalMs: 250,
+      timeoutMs: 5000,
+      timeoutMessage: 'PayPal guest checkout 未找到 United States 国籍选项。',
+    });
+  } catch (error) {
+    log(`PayPal guest checkout：国籍选项查找失败，继续按当前国籍填写。${error?.message || error}`, 'warn');
+    return false;
+  }
+  simulateClick(option);
+  try {
+    await waitUntil(() => isHostedNationalityUnitedStates() || document.querySelector('[data-testid="english-names"]'), {
+      intervalMs: 300,
+      timeoutMs: 8000,
+    });
+  } catch {
+    log('PayPal guest checkout：等待国籍切换到 United States 超时，继续尝试填写英文姓名。', 'warn');
+  }
+  await sleep(1000);
+  return true;
+}
+
+function selectHostedCountryByCode(countryCode = 'US') {
+  const select = document.getElementById('country');
+  if (!select) {
+    return false;
+  }
+  const expectedCode = String(countryCode || '').trim().toUpperCase() === 'JP' ? 'JP' : 'US';
+  if (String(select.value || '').trim().toUpperCase() === expectedCode) {
+    return false;
+  }
+  const matchedOption = Array.from(select.options || []).find((option) => {
+    const value = normalizeText(option?.value || '').toUpperCase();
+    const label = normalizeText(option?.textContent || option?.label || '').toLowerCase();
+    if (value === expectedCode) {
+      return true;
+    }
+    if (expectedCode === 'JP') {
+      return label === 'japan' || label.includes('日本');
+    }
+    return label === 'united states' || label === 'united states of america' || label === 'usa' || label.includes('美国');
+  });
+  select.value = matchedOption?.value || expectedCode;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+function isHostedGuestCheckoutLikelyEnglish() {
+  const pageText = normalizeText(document.body?.innerText || '').toLowerCase();
+  return /pay with (bank|debit|credit|card)/i.test(pageText)
+    || pageText.includes('billing address')
+    || pageText.includes('agree and continue')
+    || pageText.includes('create your password')
+    || pageText.includes('phone number');
+}
+
+function findHostedEnglishLanguageButton() {
+  const direct = document.querySelector('button[data-testid="en"], a[data-testid="en"], [role="button"][data-testid="en"]');
+  if (direct && isVisibleElement(direct) && isEnabledControl(direct)) {
+    return direct;
+  }
+  return getVisibleControls('button, a, [role="button"]').find((el) => {
+    if (!isEnabledControl(el)) {
+      return false;
+    }
+    const testId = normalizeText(el.getAttribute?.('data-testid') || '').toLowerCase();
+    const text = getActionText(el);
+    return testId === 'en' || /^english$/i.test(text);
+  }) || null;
+}
+
+async function switchHostedGuestCheckoutToEnglishIfNeeded(countryCode = '') {
+  const expectedCode = String(countryCode || '').trim().toUpperCase();
+  if (expectedCode !== 'JP' || isHostedGuestCheckoutLikelyEnglish()) {
+    return false;
+  }
+  const button = findHostedEnglishLanguageButton();
+  if (!button) {
+    return false;
+  }
+  log('PayPal guest checkout：检测到日区页面，先切换到 English 后再填写。', 'info');
+  simulateClick(button);
+  try {
+    await waitUntil(() => isHostedGuestCheckoutLikelyEnglish() || !findHostedEnglishLanguageButton(), {
+      intervalMs: 300,
+      timeoutMs: 8000,
+    });
+  } catch {
+    log('PayPal guest checkout：等待 English 页面完成超时，继续按当前页面状态尝试填写。', 'warn');
+  }
+  await waitForDocumentComplete();
+  await sleep(1000);
   return true;
 }
 
@@ -740,9 +1073,13 @@ async function fillHostedVerificationCode(payload = {}) {
     throw new Error('PayPal hosted checkout 当前页面未显示验证码输入框。');
   }
   await delayOperation({ stepKey: 'plus-checkout-create', kind: 'fill', label: 'hosted-paypal-verification-code' }, async () => {
-    inputs.forEach((input, index) => {
+    for (let index = 0; index < inputs.length; index += 1) {
+      const input = inputs[index];
       fillInput(input, code[index] || '');
-    });
+      if (index < inputs.length - 1) {
+        await sleep(120 + Math.floor(Math.random() * 90));
+      }
+    }
   });
   return {
     stage: PAYPAL_HOSTED_STAGE_VERIFICATION,
@@ -777,23 +1114,22 @@ async function fillHostedGuestCheckout(payload = {}) {
   log(`PayPal guest checkout：收到 payload.phone=${String(payload?.phone || '').trim() || '(空)'}，payload.address=${JSON.stringify(payload?.address || {})}`, 'info');
 
   await sleep(2000);
-  const countrySelect = document.getElementById('country');
-  if (countrySelect && String(countrySelect.value || '').trim().toUpperCase() !== 'US') {
-    countrySelect.value = 'US';
-    countrySelect.dispatchEvent(new Event('change', { bubbles: true }));
+  const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
+  await switchHostedGuestCheckoutToEnglishIfNeeded(address.countryCode || payload.countryCode || '');
+  if (selectHostedCountryByCode(address.countryCode || payload.countryCode || 'US')) {
     await sleep(3000);
   }
 
   const card = buildHostedVisaCard();
   const email = normalizeText(payload.email || buildHostedRandomEmail());
   const phone = normalizeText(payload.phone || '');
-  const password = String(payload.password || buildHostedRandomPassword());
-  const firstName = normalizeText(payload.firstName || 'James');
-  const lastName = normalizeText(payload.lastName || 'Smith');
+  const password = normalizeHostedPayPalSignupPassword(payload.password || '');
+  const firstName = normalizeHostedPayPalNamePart(payload.firstName, 'James');
+  const lastName = normalizeHostedPayPalNamePart(payload.lastName, 'Smith');
   const cardNumber = String(payload.cardNumber || card.number).replace(/\s+/g, '');
   const cardExpiry = normalizeText(payload.cardExpiry || card.expiry);
   const cardCvv = normalizeText(payload.cardCvv || card.cvv);
-  const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
+  const dateOfBirth = normalizeHostedPayPalDateOfBirth(payload.dateOfBirth || address.dateOfBirth || '09/05/1976');
 
   if (!email || !phone || !password || !cardNumber || !cardExpiry || !cardCvv) {
     throw new Error('PayPal hosted checkout 缺少卡支付所需资料（请先填写 PayPal 电话(不带+1) 或导入 PayPal 接码池）。');
@@ -805,13 +1141,17 @@ async function fillHostedGuestCheckout(payload = {}) {
   fillHostedInputById('cardExpiry', cardExpiry);
   fillHostedInputById('cardCvv', cardCvv);
   fillHostedInputById('password', password);
+  fillHostedInputById('dateOfBirth', dateOfBirth);
+  await switchHostedNationalityToUnitedStatesIfNeeded(address.countryCode || payload.countryCode || '');
   fillHostedInputById('firstName', firstName);
   fillHostedInputById('lastName', lastName);
   fillHostedInputById('billingLine1', address.street || '');
   fillHostedInputById('billingCity', address.city || '');
   fillHostedInputById('billingPostalCode', address.zip || '');
   fillHostedInputById('billingLine1', address.street || '');
-  selectHostedOptionByIdText('billingState', address.state || '');
+  if (!fillHostedBillingState(address)) {
+    selectHostedOptionByIdText('billingState', address.state || '');
+  }
 
   const rootScope = typeof window !== 'undefined' ? window : globalThis;
   if (!rootScope[PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL]) {
@@ -841,43 +1181,28 @@ async function fillHostedGuestCheckout(payload = {}) {
 
 async function clickHostedReviewConsent() {
   await waitForDocumentComplete();
-  log(`PayPal Hermes：开始等待账单确认文案。当前 URL：${location.href}`, 'info');
+  log(`PayPal Hermes：开始等待账单确认按钮。当前 URL：${location.href}`, 'info');
   let waited = 0;
   while (waited < 30) {
     waited += 1;
     const pageText = document.body ? document.body.innerText : '';
-    if (String(pageText || '').includes('Set up once. Pay faster next time')) {
-      log(`PayPal Hermes：第 ${waited}/30 秒命中目标文案，开始寻找 consentButton。`, 'info');
-      let button = findHostedReviewConsentButton();
-      if (button && isEnabledControl(button)) {
-        log('PayPal Hermes：已找到 consentButton，准备点击 Agree and Continue。', 'info');
-        button.click();
-        return {
-          stage: PAYPAL_HOSTED_STAGE_REVIEW,
-          submitted: true,
-        };
-      }
-      log('PayPal Hermes：首次未找到 consentButton，2 秒后重试一次。', 'warn');
-      await sleep(2000);
-      button = findHostedReviewConsentButton();
-      if (button && isEnabledControl(button)) {
-        log('PayPal Hermes：重试后找到 consentButton，准备点击 Agree and Continue。', 'info');
-        button.click();
-        return {
-          stage: PAYPAL_HOSTED_STAGE_REVIEW,
-          submitted: true,
-        };
-      }
-      log('PayPal Hermes：重试后仍未找到 consentButton。', 'warn');
-      throw new Error('PayPal hosted checkout 未找到 consentButton。');
+    const button = findHostedReviewConsentButton();
+    if (button && isEnabledControl(button)) {
+      const textMatched = /Set up once\. Pay faster next time|One-time setup,\s*faster checkouts|By clicking the button below/i.test(String(pageText || ''));
+      log(`PayPal Hermes：第 ${waited}/30 秒找到 consentButton${textMatched ? '，页面文案已确认' : '，未等待旧目标文案'}，准备点击 Agree & Continue。`, 'info');
+      simulateClick(button);
+      return {
+        stage: PAYPAL_HOSTED_STAGE_REVIEW,
+        submitted: true,
+      };
     }
     if (waited === 1 || waited % 5 === 0) {
-      log(`PayPal Hermes：尚未命中目标文案，继续等待（${waited}/30）。`, 'info');
+      log(`PayPal Hermes：尚未找到 consentButton，继续等待（${waited}/30）。`, 'info');
     }
     await sleep(1000);
   }
-  log('PayPal Hermes：等待 30 秒后仍未命中目标文案。', 'warn');
-  throw new Error('PayPal hosted checkout 账单确认页超时，未检测到目标文案。');
+  log('PayPal Hermes：等待 30 秒后仍未找到 consentButton。', 'warn');
+  throw new Error('PayPal hosted checkout 账单确认页超时，未找到 Agree & Continue 按钮。');
 }
 
 async function runHostedCheckoutStep(payload = {}) {
@@ -1175,6 +1500,7 @@ function inspectPayPalState() {
     hostedGuestPhoneErrorMessage: getPayPalHostedGuestPhoneErrorMessage(),
     verificationInputsVisible: hasHostedVerificationInputs(),
     hostedVerificationInvalidCode: hasHostedInvalidVerificationCodeError(),
+    hostedVerificationBlankError: hasHostedRecoverableBlankVerificationError(),
     hostedVerificationErrorText: getHostedVerificationErrorText(),
     hostedVerificationResendReady: Boolean(findHostedVerificationResendButton()),
     reviewConsentReady: Boolean(findHostedReviewConsentButton()),

@@ -582,6 +582,10 @@
       return '';
     }
     const config = resolveConfig(state, deps);
+    const ignoredCodes = Array.from(new Set([
+      ...resolveIgnoredCodeSet(normalizedActivation),
+      ...(await captureExistingCodesForActivation(config, normalizedActivation)),
+    ]));
     const probePayload = await postForm(config, '/sms/check_resend', {
       key: config.apiKey,
       orderid: normalizedActivation.activationId,

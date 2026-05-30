@@ -564,6 +564,8 @@
               plusModeEnabled: prevState.plusModeEnabled,
               plusPaymentMethod: prevState.plusPaymentMethod,
               plusAccountAccessStrategy: prevState.plusAccountAccessStrategy,
+              plusCheckoutMode: prevState.plusCheckoutMode,
+              plusCheckoutProfiles: prevState.plusCheckoutProfiles,
               plusHostedCheckoutOauthDelaySeconds: prevState.plusHostedCheckoutOauthDelaySeconds,
               hostedCheckoutVerificationPopupDelaySeconds: prevState.hostedCheckoutVerificationPopupDelaySeconds,
               hostedCheckoutVerificationUrl: prevState.hostedCheckoutVerificationUrl,

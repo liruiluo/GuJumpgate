@@ -5,9 +5,9 @@
 如果这个项目能帮上你，欢迎点个 Star⭐~
 
 > [!IMPORTANT]
-> 目前 OAuth 风控严重，基本必跳手机绑定，SESSION 拿 AT 已死。
+> 目前 PAYPAY 无卡仅剩日区PP可通
 >
-> 以后可能只能 OAUTH 接码了。
+> GOPAY半自动可实现，后面大概会推的，
 
 ## 已实现能力
 
@@ -35,7 +35,7 @@
 
 ## 前提要求
 
-1. 1 个带 API、且能连续正常接收 PayPal 验证码的 US `+1` 接码手机号
+1. 1 个带 API、且能连续正常接收 PayPal 验证码的 JP `+81` 接码手机号
 2. 1 个或 N 个支持 `IMAP` 和 `Graph` 的 Outlook 邮箱，或者自建 Cloudflare Temp Email / Cloud Mail
 3. 1 个相对干净、支持 PayPal 注册的 US 代理
 

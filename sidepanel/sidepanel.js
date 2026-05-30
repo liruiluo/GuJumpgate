@@ -183,6 +183,9 @@ const inputCodex2ApiAdminKey = document.getElementById('input-codex2api-admin-ke
 const rowCustomPassword = document.getElementById('row-custom-password');
 const rowPlusMode = document.getElementById('row-plus-mode');
 const inputPlusModeEnabled = document.getElementById('input-plus-mode-enabled');
+const plusCheckoutModeSwitchGroup = document.getElementById('plus-checkout-mode-switch-group');
+const inputPlusCheckoutModeUs = document.getElementById('input-plus-checkout-mode-us');
+const inputPlusCheckoutModeJp = document.getElementById('input-plus-checkout-mode-jp');
 const rowPlusPaymentMethod = document.getElementById('row-plus-payment-method');
 const selectPlusPaymentMethod = document.getElementById('select-plus-payment-method');
 const rowPayPalAccount = document.getElementById('row-paypal-account');
@@ -638,6 +641,19 @@ const GPC_HELPER_PORTAL_URL = '';
 const GPC_HELPER_PHONE_MODE_AUTO = 'auto';
 const GPC_HELPER_PHONE_MODE_MANUAL = 'manual';
 const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
+const PLUS_CHECKOUT_MODE_US_PP = 'us_pp';
+const PLUS_CHECKOUT_MODE_JP_PP = 'jp_pp';
+const DEFAULT_PLUS_CHECKOUT_MODE = PLUS_CHECKOUT_MODE_US_PP;
+const PLUS_CHECKOUT_MODE_LABELS = Object.freeze({
+  [PLUS_CHECKOUT_MODE_US_PP]: '美区PP Plus Checkout',
+  [PLUS_CHECKOUT_MODE_JP_PP]: '日区PP Plus Checkout',
+});
+const PLUS_CHECKOUT_PROFILE_SETTING_KEYS = Object.freeze([
+  'hostedCheckoutVerificationUrl',
+  'hostedCheckoutPhoneNumber',
+  'hostedCheckoutSmsPoolText',
+  'hostedCheckoutSmsPoolUsage',
+]);
 const FIXED_PLUS_MODE_ENABLED = true;
 const GUIDE_REPOSITORY_URL = 'https://github.com/FoundZiGu/GuJumpgate';
 const SIGNUP_METHOD_EMAIL = 'email';
@@ -651,6 +667,11 @@ const SMSBOWER_REUSE_LOCK_TITLE = 'SMSBower 当前不使用普通号码复用';
 const PROVIDER_REUSE_LOCK_TITLE = '当前接码服务商不支持号码复用';
 const PROVIDER_FREE_REUSE_LOCK_TITLE = '当前接码服务商不支持白嫖复用';
 let latestState = null;
+let localPlusCheckoutMode = DEFAULT_PLUS_CHECKOUT_MODE;
+let localPlusCheckoutProfiles = {
+  [PLUS_CHECKOUT_MODE_US_PP]: null,
+  [PLUS_CHECKOUT_MODE_JP_PP]: null,
+};
 let currentPlusModeEnabled = false;
 let currentPlusPaymentMethod = DEFAULT_PLUS_PAYMENT_METHOD;
 let currentPlusAccountAccessStrategy = PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH;
@@ -2609,11 +2630,14 @@ function syncLatestState(nextState) {
     ? { ...NODE_DEFAULT_STATUSES, ...(latestState?.nodeStatuses || {}), ...nextState.nodeStatuses }
     : getNodeStatuses(latestState);
 
-  latestState = {
+  latestState = normalizePlusCheckoutStateForUi({
     ...(latestState || {}),
     ...(nextState || {}),
     nodeStatuses: mergedNodeStatuses,
-  };
+  }, {
+    legacyOverrideSource: nextState || {},
+  });
+  syncLocalPlusCheckoutDraftFromState(latestState);
 
   renderAccountRecords(latestState);
 }
@@ -2691,6 +2715,327 @@ function getSelectedPlusPaymentMethod(state = latestState) {
     ? selectPlusPaymentMethod.value
     : state?.plusPaymentMethod;
   return normalizePlusPaymentMethod(selected || DEFAULT_PLUS_PAYMENT_METHOD);
+}
+
+function normalizePlusCheckoutModeValue(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === PLUS_CHECKOUT_MODE_JP_PP
+    ? PLUS_CHECKOUT_MODE_JP_PP
+    : DEFAULT_PLUS_CHECKOUT_MODE;
+}
+
+function buildDefaultPlusCheckoutProfile() {
+  return {
+    hostedCheckoutVerificationUrl: '',
+    hostedCheckoutPhoneNumber: '',
+    hostedCheckoutSmsPoolText: '',
+    hostedCheckoutSmsPoolUsage: {},
+  };
+}
+
+function normalizePlusCheckoutProfileValue(profile = {}, fallback = null) {
+  const rawProfile = profile && typeof profile === 'object' && !Array.isArray(profile)
+    ? profile
+    : {};
+  const baseProfile = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+    ? fallback
+    : buildDefaultPlusCheckoutProfile();
+  return {
+    plusHostedCheckoutOauthDelaySeconds: normalizePlusHostedCheckoutOauthDelaySeconds(
+      rawProfile.plusHostedCheckoutOauthDelaySeconds ?? baseProfile.plusHostedCheckoutOauthDelaySeconds
+    ),
+    plusCheckoutCloudConversionEnabled: Boolean(
+      rawProfile.plusCheckoutCloudConversionEnabled ?? baseProfile.plusCheckoutCloudConversionEnabled
+    ),
+    plusCheckoutCloudConversionApiUrl: normalizePlusCheckoutCloudConversionApiUrlValue(
+      rawProfile.plusCheckoutCloudConversionApiUrl ?? baseProfile.plusCheckoutCloudConversionApiUrl
+    ),
+    plusCheckoutCloudConversionApiKey: normalizePlusCheckoutCloudConversionApiKeyValue(
+      rawProfile.plusCheckoutCloudConversionApiKey ?? baseProfile.plusCheckoutCloudConversionApiKey
+    ),
+    plusCheckoutConversionProxyUrl: normalizePlusCheckoutConversionProxyUrlValue(
+      rawProfile.plusCheckoutConversionProxyUrl ?? baseProfile.plusCheckoutConversionProxyUrl
+    ),
+    hostedCheckoutVerificationUrl: normalizeHostedCheckoutVerificationUrlValue(
+      rawProfile.hostedCheckoutVerificationUrl ?? baseProfile.hostedCheckoutVerificationUrl
+    ),
+    hostedCheckoutPhoneNumber: normalizeHostedCheckoutPhoneValue(
+      rawProfile.hostedCheckoutPhoneNumber ?? baseProfile.hostedCheckoutPhoneNumber
+    ),
+    hostedCheckoutSmsPoolText: normalizeHostedCheckoutSmsPoolTextValue(
+      rawProfile.hostedCheckoutSmsPoolText ?? baseProfile.hostedCheckoutSmsPoolText
+    ),
+    hostedCheckoutSmsPoolUsage: rawProfile.hostedCheckoutSmsPoolUsage && typeof rawProfile.hostedCheckoutSmsPoolUsage === 'object'
+      ? rawProfile.hostedCheckoutSmsPoolUsage
+      : (baseProfile.hostedCheckoutSmsPoolUsage && typeof baseProfile.hostedCheckoutSmsPoolUsage === 'object'
+        ? baseProfile.hostedCheckoutSmsPoolUsage
+        : {}),
+    hostedCheckoutSmsPoolAutoDisableEnabled: Boolean(
+      rawProfile.hostedCheckoutSmsPoolAutoDisableEnabled ?? baseProfile.hostedCheckoutSmsPoolAutoDisableEnabled
+    ),
+    hostedCheckoutFirstDirectResendEnabled: Boolean(
+      rawProfile.hostedCheckoutFirstDirectResendEnabled ?? baseProfile.hostedCheckoutFirstDirectResendEnabled
+    ),
+    hostedCheckoutFirstResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+      rawProfile.hostedCheckoutFirstResendWaitSeconds ?? baseProfile.hostedCheckoutFirstResendWaitSeconds,
+      20
+    ),
+    hostedCheckoutSubsequentResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+      rawProfile.hostedCheckoutSubsequentResendWaitSeconds ?? baseProfile.hostedCheckoutSubsequentResendWaitSeconds,
+      25
+    ),
+    hostedCheckoutVerificationResendMaxAttempts: normalizeHostedCheckoutVerificationResendMaxAttempts(
+      rawProfile.hostedCheckoutVerificationResendMaxAttempts ?? baseProfile.hostedCheckoutVerificationResendMaxAttempts,
+      1
+    ),
+    hostedCheckoutVerificationPollAttempts: normalizeHostedCheckoutVerificationPollAttempts(
+      rawProfile.hostedCheckoutVerificationPollAttempts ?? baseProfile.hostedCheckoutVerificationPollAttempts,
+      6
+    ),
+    hostedCheckoutVerificationPollIntervalSeconds: normalizeHostedCheckoutVerificationPollIntervalSeconds(
+      rawProfile.hostedCheckoutVerificationPollIntervalSeconds ?? baseProfile.hostedCheckoutVerificationPollIntervalSeconds,
+      5
+    ),
+  };
+}
+
+function buildLegacyPlusCheckoutProfileFromState(state = {}) {
+  return normalizePlusCheckoutProfileValue({
+    plusHostedCheckoutOauthDelaySeconds: state?.plusHostedCheckoutOauthDelaySeconds,
+    plusCheckoutCloudConversionEnabled: state?.plusCheckoutCloudConversionEnabled,
+    plusCheckoutCloudConversionApiUrl: state?.plusCheckoutCloudConversionApiUrl,
+    plusCheckoutCloudConversionApiKey: state?.plusCheckoutCloudConversionApiKey,
+    plusCheckoutConversionProxyUrl: state?.plusCheckoutConversionProxyUrl,
+    hostedCheckoutVerificationUrl: state?.hostedCheckoutVerificationUrl,
+    hostedCheckoutPhoneNumber: state?.hostedCheckoutPhoneNumber,
+    hostedCheckoutSmsPoolText: state?.hostedCheckoutSmsPoolText,
+    hostedCheckoutSmsPoolUsage: state?.hostedCheckoutSmsPoolUsage,
+    hostedCheckoutSmsPoolAutoDisableEnabled: state?.hostedCheckoutSmsPoolAutoDisableEnabled,
+    hostedCheckoutFirstDirectResendEnabled: state?.hostedCheckoutFirstDirectResendEnabled,
+    hostedCheckoutFirstResendWaitSeconds: state?.hostedCheckoutFirstResendWaitSeconds,
+    hostedCheckoutSubsequentResendWaitSeconds: state?.hostedCheckoutSubsequentResendWaitSeconds,
+    hostedCheckoutVerificationResendMaxAttempts: state?.hostedCheckoutVerificationResendMaxAttempts,
+    hostedCheckoutVerificationPollAttempts: state?.hostedCheckoutVerificationPollAttempts,
+    hostedCheckoutVerificationPollIntervalSeconds: state?.hostedCheckoutVerificationPollIntervalSeconds,
+  });
+}
+
+function normalizePlusCheckoutProfilesValue(value = {}, fallbackState = {}) {
+  const rawProfiles = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {};
+  const legacyProfile = buildLegacyPlusCheckoutProfileFromState(fallbackState);
+  const hasUsProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_US_PP);
+  const hasJpProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_JP_PP);
+  const usProfile = hasUsProfile
+    ? normalizePlusCheckoutProfileValue(rawProfiles[PLUS_CHECKOUT_MODE_US_PP])
+    : normalizePlusCheckoutProfileValue(legacyProfile);
+  const jpProfile = hasJpProfile
+    ? normalizePlusCheckoutProfileValue(rawProfiles[PLUS_CHECKOUT_MODE_JP_PP])
+    : normalizePlusCheckoutProfileValue(hasUsProfile ? usProfile : legacyProfile);
+  return {
+    [PLUS_CHECKOUT_MODE_US_PP]: usProfile,
+    [PLUS_CHECKOUT_MODE_JP_PP]: jpProfile,
+  };
+}
+
+function buildPlusCheckoutLegacyPatchFromProfile(profile = {}) {
+  const normalizedProfile = normalizePlusCheckoutProfileValue(profile);
+  return Object.fromEntries(
+    PLUS_CHECKOUT_PROFILE_SETTING_KEYS.map((key) => [key, normalizedProfile[key]])
+  );
+}
+
+function normalizePlusCheckoutStateForUi(state = {}, options = {}) {
+  const mode = normalizePlusCheckoutModeValue(state?.plusCheckoutMode);
+  const profiles = normalizePlusCheckoutProfilesValue(state?.plusCheckoutProfiles || {}, state);
+  const legacyOverrideSource = options?.legacyOverrideSource && typeof options.legacyOverrideSource === 'object'
+    ? options.legacyOverrideSource
+    : null;
+  const hasExplicitLegacyOverrides = Boolean(legacyOverrideSource) && PLUS_CHECKOUT_PROFILE_SETTING_KEYS.some((key) => (
+    Object.prototype.hasOwnProperty.call(legacyOverrideSource, key)
+  ));
+  const activeProfile = hasExplicitLegacyOverrides
+    ? normalizePlusCheckoutProfileValue({
+      ...(profiles[mode] || {}),
+      ...buildLegacyPlusCheckoutProfileFromState({
+        ...state,
+        ...legacyOverrideSource,
+      }),
+    }, profiles[mode])
+    : (profiles[mode] || buildLegacyPlusCheckoutProfileFromState(state));
+  return {
+    ...(state || {}),
+    plusCheckoutMode: mode,
+    plusCheckoutProfiles: {
+      ...profiles,
+      [mode]: activeProfile,
+    },
+    ...buildPlusCheckoutLegacyPatchFromProfile(activeProfile),
+  };
+}
+
+function syncLocalPlusCheckoutDraftFromState(state = latestState) {
+  const normalizedState = normalizePlusCheckoutStateForUi(state || {});
+  localPlusCheckoutMode = normalizePlusCheckoutModeValue(normalizedState.plusCheckoutMode);
+  localPlusCheckoutProfiles = normalizePlusCheckoutProfilesValue(
+    normalizedState.plusCheckoutProfiles || {},
+    normalizedState
+  );
+  return {
+    mode: localPlusCheckoutMode,
+    profiles: localPlusCheckoutProfiles,
+  };
+}
+
+function getLocalPlusCheckoutProfilesDraft(state = latestState) {
+  const usProfile = localPlusCheckoutProfiles?.[PLUS_CHECKOUT_MODE_US_PP];
+  const jpProfile = localPlusCheckoutProfiles?.[PLUS_CHECKOUT_MODE_JP_PP];
+  if (!usProfile || !jpProfile) {
+    syncLocalPlusCheckoutDraftFromState(state);
+  }
+  return localPlusCheckoutProfiles;
+}
+
+function getSelectedPlusCheckoutMode(state = latestState) {
+  if (inputPlusCheckoutModeUs?.checked) {
+    return PLUS_CHECKOUT_MODE_US_PP;
+  }
+  if (inputPlusCheckoutModeJp?.checked) {
+    return PLUS_CHECKOUT_MODE_JP_PP;
+  }
+  return normalizePlusCheckoutModeValue(state?.plusCheckoutMode);
+}
+
+function buildPlusCheckoutProfileFromInputs() {
+  return normalizePlusCheckoutProfileValue({
+    hostedCheckoutVerificationUrl: inputHostedCheckoutVerificationUrl?.value || '',
+    hostedCheckoutPhoneNumber: inputHostedCheckoutPhone?.value || '',
+    hostedCheckoutSmsPoolText: inputHostedCheckoutSmsPool?.value || '',
+    hostedCheckoutSmsPoolUsage: latestState?.hostedCheckoutSmsPoolUsage || {},
+  });
+}
+
+function getActivePlusCheckoutModeFromState(state = latestState) {
+  return normalizePlusCheckoutModeValue(localPlusCheckoutMode || state?.plusCheckoutMode);
+}
+
+function syncPlusCheckoutProfileForModeIntoLatestState(mode, profile) {
+  const normalizedMode = normalizePlusCheckoutModeValue(mode);
+  const currentProfiles = getLocalPlusCheckoutProfilesDraft(latestState);
+  const nextProfiles = {
+    ...currentProfiles,
+    [normalizedMode]: normalizePlusCheckoutProfileValue(
+      profile,
+      currentProfiles[normalizedMode]
+    ),
+  };
+  localPlusCheckoutProfiles = nextProfiles;
+  const activeMode = getActivePlusCheckoutModeFromState(latestState);
+  localPlusCheckoutMode = activeMode;
+  const activeProfile = nextProfiles[activeMode] || currentProfiles[activeMode] || buildDefaultPlusCheckoutProfile();
+  syncLatestState({
+    plusCheckoutMode: activeMode,
+    plusCheckoutProfiles: nextProfiles,
+    ...buildPlusCheckoutLegacyPatchFromProfile(activeProfile),
+  });
+}
+
+function syncActivePlusCheckoutProfileIntoLatestState() {
+  const activeMode = getActivePlusCheckoutModeFromState(latestState);
+  const draftProfile = buildPlusCheckoutProfileFromInputs();
+  syncPlusCheckoutProfileForModeIntoLatestState(activeMode, draftProfile);
+}
+
+function syncActivePlusCheckoutProfilePatch(partialPatch = {}) {
+  const currentMode = getActivePlusCheckoutModeFromState(latestState);
+  const currentProfiles = getLocalPlusCheckoutProfilesDraft(latestState);
+  const currentProfile = currentProfiles[currentMode] || buildDefaultPlusCheckoutProfile();
+  const nextProfile = normalizePlusCheckoutProfileValue({
+    ...currentProfile,
+    ...(partialPatch && typeof partialPatch === 'object' ? partialPatch : {}),
+  }, currentProfile);
+  syncPlusCheckoutProfileForModeIntoLatestState(currentMode, nextProfile);
+}
+
+function applyPlusCheckoutProfileToInputs(state = latestState, options = {}) {
+  const normalizedState = normalizePlusCheckoutStateForUi(state || {});
+  const currentMode = normalizePlusCheckoutModeValue(
+    options.mode !== undefined ? options.mode : normalizedState?.plusCheckoutMode
+  );
+  const currentProfiles = getLocalPlusCheckoutProfilesDraft(normalizedState);
+  const profile = currentProfiles[currentMode] || buildDefaultPlusCheckoutProfile();
+  if (inputPlusCheckoutModeUs) {
+    inputPlusCheckoutModeUs.checked = currentMode === PLUS_CHECKOUT_MODE_US_PP;
+    inputPlusCheckoutModeUs.disabled = Boolean(options.disabled);
+  }
+  if (inputPlusCheckoutModeJp) {
+    inputPlusCheckoutModeJp.checked = currentMode === PLUS_CHECKOUT_MODE_JP_PP;
+    inputPlusCheckoutModeJp.disabled = Boolean(options.disabled);
+  }
+  if (inputPlusHostedCheckoutOauthDelaySeconds) {
+    inputPlusHostedCheckoutOauthDelaySeconds.value = String(
+      normalizePlusHostedCheckoutOauthDelaySeconds(normalizedState?.plusHostedCheckoutOauthDelaySeconds)
+    );
+  }
+  if (inputPlusCheckoutCloudConversionEnabled) {
+    inputPlusCheckoutCloudConversionEnabled.checked = Boolean(normalizedState?.plusCheckoutCloudConversionEnabled);
+  }
+  if (inputPlusCheckoutCloudConversionApiUrl) {
+    inputPlusCheckoutCloudConversionApiUrl.value = normalizePlusCheckoutCloudConversionApiUrlValue(normalizedState?.plusCheckoutCloudConversionApiUrl || '');
+  }
+  if (inputPlusCheckoutCloudConversionApiKey) {
+    inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(normalizedState?.plusCheckoutCloudConversionApiKey || '');
+  }
+  if (inputPlusCheckoutConversionProxy) {
+    inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(normalizedState?.plusCheckoutConversionProxyUrl || '');
+  }
+  if (inputHostedCheckoutVerificationUrl) {
+    inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(profile.hostedCheckoutVerificationUrl || '');
+  }
+  if (inputHostedCheckoutPhone) {
+    inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(profile.hostedCheckoutPhoneNumber || '');
+  }
+  if (inputHostedCheckoutSmsPool) {
+    inputHostedCheckoutSmsPool.value = normalizeHostedCheckoutSmsPoolTextValue(profile.hostedCheckoutSmsPoolText || '');
+  }
+  if (inputHostedCheckoutSmsPoolAutoDisableEnabled) {
+    inputHostedCheckoutSmsPoolAutoDisableEnabled.checked = Boolean(normalizedState?.hostedCheckoutSmsPoolAutoDisableEnabled);
+  }
+  if (inputHostedCheckoutFirstDirectResendEnabled) {
+    inputHostedCheckoutFirstDirectResendEnabled.checked = Boolean(normalizedState?.hostedCheckoutFirstDirectResendEnabled);
+  }
+  if (inputHostedCheckoutFirstResendWaitSeconds) {
+    inputHostedCheckoutFirstResendWaitSeconds.value = String(
+      normalizeHostedCheckoutResendWaitSeconds(normalizedState?.hostedCheckoutFirstResendWaitSeconds, 20)
+    );
+  }
+  if (inputHostedCheckoutSubsequentResendWaitSeconds) {
+    inputHostedCheckoutSubsequentResendWaitSeconds.value = String(
+      normalizeHostedCheckoutResendWaitSeconds(normalizedState?.hostedCheckoutSubsequentResendWaitSeconds, 25)
+    );
+  }
+  if (inputHostedCheckoutVerificationPollAttempts) {
+    inputHostedCheckoutVerificationPollAttempts.value = String(
+      normalizeHostedCheckoutVerificationPollAttempts(normalizedState?.hostedCheckoutVerificationPollAttempts, 6)
+    );
+  }
+  if (inputHostedCheckoutVerificationPollIntervalSeconds) {
+    inputHostedCheckoutVerificationPollIntervalSeconds.value = String(
+      normalizeHostedCheckoutVerificationPollIntervalSeconds(normalizedState?.hostedCheckoutVerificationPollIntervalSeconds, 5)
+    );
+  }
+  if (inputHostedCheckoutVerificationResendMaxAttempts) {
+    inputHostedCheckoutVerificationResendMaxAttempts.value = String(
+      normalizeHostedCheckoutVerificationResendMaxAttempts(normalizedState?.hostedCheckoutVerificationResendMaxAttempts, 1)
+    );
+  }
+  setPlusCheckoutConversionProxyTestResult('未测试');
+  if (typeof setHostedCheckoutManualCodeDisplay === 'function') {
+    setHostedCheckoutManualCodeDisplay('未获取');
+  }
+  updatePlusCheckoutConversionModeUi();
+  validateHostedCheckoutContactConfig();
 }
 
 function normalizeGpcHelperPhoneModeValue(value = '') {
@@ -4648,6 +4993,17 @@ function collectSettingsPayload() {
   const fixedPlusModeEnabled = typeof FIXED_PLUS_MODE_ENABLED === 'boolean'
     ? FIXED_PLUS_MODE_ENABLED
     : true;
+  const selectedPlusCheckoutMode = getActivePlusCheckoutModeFromState(latestState);
+  const currentPlusCheckoutProfiles = getLocalPlusCheckoutProfilesDraft(latestState);
+  const nextPlusCheckoutProfiles = {
+    ...currentPlusCheckoutProfiles,
+    [selectedPlusCheckoutMode]: normalizePlusCheckoutProfileValue(
+      buildPlusCheckoutProfileFromInputs(),
+      currentPlusCheckoutProfiles[selectedPlusCheckoutMode]
+    ),
+  };
+  const activePlusCheckoutProfile = nextPlusCheckoutProfiles[selectedPlusCheckoutMode];
+  const hotmailAccountsForSave = getHotmailAccounts(latestState);
   return {
     ...(contributionModeEnabled ? {} : {
       panelMode: effectivePanelMode,
@@ -4697,6 +5053,8 @@ function collectSettingsPayload() {
     codex2apiAdminKey: inputCodex2ApiAdminKey.value.trim(),
     plusModeEnabled: fixedPlusModeEnabled,
     plusPaymentMethod,
+    plusCheckoutMode: selectedPlusCheckoutMode,
+    plusCheckoutProfiles: nextPlusCheckoutProfiles,
     paypalEmail: String(currentPayPalAccount?.email || latestState?.paypalEmail || '').trim(),
     paypalPassword: String(currentPayPalAccount?.password || latestState?.paypalPassword || ''),
     currentPayPalAccountId: String(latestState?.currentPayPalAccountId || '').trim(),
@@ -4780,6 +5138,10 @@ function collectSettingsPayload() {
     ...buildManagedAliasBaseEmailPayload(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
+    ...(hotmailAccountsForSave.length > 0 ? {
+      hotmailAccounts: hotmailAccountsForSave,
+      currentHotmailAccountId: String(latestState?.currentHotmailAccountId || '').trim(),
+    } : {}),
     hotmailServiceMode: getSelectedHotmailServiceMode(),
     hotmailRemoteBaseUrl: inputHotmailRemoteBaseUrl.value.trim(),
     hotmailLocalBaseUrl: inputHotmailLocalBaseUrl.value.trim(),
@@ -4843,21 +5205,7 @@ function collectSettingsPayload() {
     plusCheckoutConversionProxyUrl: typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy
       ? normalizePlusCheckoutConversionProxyUrlValue(inputPlusCheckoutConversionProxy.value)
       : '',
-    hostedCheckoutVerificationUrl: typeof inputHostedCheckoutVerificationUrl !== 'undefined' && inputHostedCheckoutVerificationUrl
-      ? normalizeHostedCheckoutVerificationUrlValue(inputHostedCheckoutVerificationUrl.value)
-      : '',
-    hostedCheckoutPhoneNumber: typeof inputHostedCheckoutPhone !== 'undefined' && inputHostedCheckoutPhone
-      ? normalizeHostedCheckoutPhoneValue(inputHostedCheckoutPhone.value)
-      : '',
-    hostedCheckoutSmsPoolText: typeof inputHostedCheckoutSmsPool !== 'undefined' && inputHostedCheckoutSmsPool
-      ? normalizeHostedCheckoutSmsPoolTextValue(inputHostedCheckoutSmsPool.value)
-      : '',
-    hostedCheckoutSmsPoolUsage: latestState?.hostedCheckoutSmsPoolUsage && typeof latestState.hostedCheckoutSmsPoolUsage === 'object'
-      ? latestState.hostedCheckoutSmsPoolUsage
-      : {},
-    hostedCheckoutSmsPoolAutoDisableEnabled: typeof inputHostedCheckoutSmsPoolAutoDisableEnabled !== 'undefined' && inputHostedCheckoutSmsPoolAutoDisableEnabled
-      ? Boolean(inputHostedCheckoutSmsPoolAutoDisableEnabled.checked)
-      : false,
+    ...buildPlusCheckoutLegacyPatchFromProfile(activePlusCheckoutProfile),
     chatGptApiSmsPoolText: typeof inputChatGptApiSmsPool !== 'undefined' && inputChatGptApiSmsPool
       ? normalizeHostedCheckoutSmsPoolTextValue(inputChatGptApiSmsPool.value)
       : '',
@@ -4866,6 +5214,9 @@ function collectSettingsPayload() {
       : {},
     chatGptApiSmsPoolAutoDisableEnabled: typeof inputChatGptApiSmsPoolAutoDisableEnabled !== 'undefined' && inputChatGptApiSmsPoolAutoDisableEnabled
       ? Boolean(inputChatGptApiSmsPoolAutoDisableEnabled.checked)
+      : false,
+    hostedCheckoutSmsPoolAutoDisableEnabled: typeof inputHostedCheckoutSmsPoolAutoDisableEnabled !== 'undefined' && inputHostedCheckoutSmsPoolAutoDisableEnabled
+      ? Boolean(inputHostedCheckoutSmsPoolAutoDisableEnabled.checked)
       : false,
     hostedCheckoutFirstDirectResendEnabled: typeof inputHostedCheckoutFirstDirectResendEnabled !== 'undefined' && inputHostedCheckoutFirstDirectResendEnabled
       ? Boolean(inputHostedCheckoutFirstDirectResendEnabled.checked)
@@ -10461,6 +10812,13 @@ function updatePlusModeUI() {
   if (typeof rowPlusMode !== 'undefined' && rowPlusMode) {
     rowPlusMode.style.display = supportsPlusMode ? '' : 'none';
   }
+  const checkoutModeSwitchVisible = supportsPlusMode && enabled && selectedMethod === paypalValue;
+  if (plusCheckoutModeSwitchGroup) {
+    plusCheckoutModeSwitchGroup.style.display = supportsPlusMode ? '' : 'none';
+  }
+  [inputPlusCheckoutModeUs, inputPlusCheckoutModeJp].filter(Boolean).forEach((input) => {
+    input.disabled = !checkoutModeSwitchVisible;
+  });
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod) {
     selectPlusPaymentMethod.value = selectedMethod;
     if (selectPlusPaymentMethod.style) {
@@ -11168,7 +11526,7 @@ async function saveSettings(options = {}) {
     }
 
     if (response?.state && saveRevision === settingsSaveRevision) {
-      applySettingsState(response.state);
+      applySettingsState(preserveHotmailAccountsForSettingsSaveResponse(response.state, payload));
     } else {
       syncLatestState(payload);
       if (saveRevision === settingsSaveRevision) {
@@ -11441,6 +11799,8 @@ function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethodOr
 // ============================================================
 
 function applySettingsState(state) {
+  state = normalizePlusCheckoutStateForUi(state || {});
+  syncLocalPlusCheckoutDraftFromState(state);
   if (typeof syncStepDefinitionsForMode === 'function') {
     const stepDefinitionState = typeof resolveStepDefinitionCapabilityState === 'function'
       ? resolveStepDefinitionCapabilityState(state, {
@@ -11523,6 +11883,9 @@ function applySettingsState(state) {
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod) {
     selectPlusPaymentMethod.value = normalizePlusPaymentMethod(state?.plusPaymentMethod);
   }
+  applyPlusCheckoutProfileToInputs(state, {
+    mode: state?.plusCheckoutMode,
+  });
   if (typeof inputGpcHelperApi !== 'undefined' && inputGpcHelperApi) {
     const defaultGpcHelperApiUrl = typeof DEFAULT_GPC_HELPER_API_URL !== 'undefined'
       ? DEFAULT_GPC_HELPER_API_URL
@@ -11862,73 +12225,11 @@ function applySettingsState(state) {
     inputAutoDelayMinutes.value = String(normalizeAutoDelayMinutes(state?.autoRunDelayMinutes));
   }
   inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(state?.autoStepDelaySeconds);
-  if (typeof inputPlusHostedCheckoutOauthDelaySeconds !== 'undefined' && inputPlusHostedCheckoutOauthDelaySeconds) {
-    inputPlusHostedCheckoutOauthDelaySeconds.value = String(
-      normalizePlusHostedCheckoutOauthDelaySeconds(state?.plusHostedCheckoutOauthDelaySeconds)
-    );
-  }
-  if (typeof inputPlusCheckoutCloudConversionEnabled !== 'undefined' && inputPlusCheckoutCloudConversionEnabled) {
-    inputPlusCheckoutCloudConversionEnabled.checked = Boolean(state?.plusCheckoutCloudConversionEnabled);
-  }
-  if (typeof inputPlusCheckoutCloudConversionApiUrl !== 'undefined' && inputPlusCheckoutCloudConversionApiUrl) {
-    inputPlusCheckoutCloudConversionApiUrl.value = normalizePlusCheckoutCloudConversionApiUrlValue(state?.plusCheckoutCloudConversionApiUrl || '');
-  }
-  if (typeof inputPlusCheckoutCloudConversionApiKey !== 'undefined' && inputPlusCheckoutCloudConversionApiKey) {
-    inputPlusCheckoutCloudConversionApiKey.value = normalizePlusCheckoutCloudConversionApiKeyValue(state?.plusCheckoutCloudConversionApiKey || '');
-  }
-  if (typeof inputPlusCheckoutConversionProxy !== 'undefined' && inputPlusCheckoutConversionProxy) {
-    inputPlusCheckoutConversionProxy.value = normalizePlusCheckoutConversionProxyUrlValue(state?.plusCheckoutConversionProxyUrl || '');
-  }
-  updatePlusCheckoutConversionModeUi();
-  if (typeof inputHostedCheckoutVerificationUrl !== 'undefined' && inputHostedCheckoutVerificationUrl) {
-    inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(state?.hostedCheckoutVerificationUrl || '');
-  }
-  if (typeof setHostedCheckoutManualCodeDisplay === 'function') {
-    setHostedCheckoutManualCodeDisplay('未获取');
-  }
-  if (typeof inputHostedCheckoutPhone !== 'undefined' && inputHostedCheckoutPhone) {
-    inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(state?.hostedCheckoutPhoneNumber || '');
-  }
-  if (typeof inputHostedCheckoutSmsPool !== 'undefined' && inputHostedCheckoutSmsPool) {
-    const restoredHostedPoolText = normalizeHostedCheckoutSmsPoolTextValue(state?.hostedCheckoutSmsPoolText || '');
-    inputHostedCheckoutSmsPool.value = restoredHostedPoolText;
-  }
-  if (typeof inputHostedCheckoutSmsPoolAutoDisableEnabled !== 'undefined' && inputHostedCheckoutSmsPoolAutoDisableEnabled) {
-    inputHostedCheckoutSmsPoolAutoDisableEnabled.checked = Boolean(state?.hostedCheckoutSmsPoolAutoDisableEnabled);
-  }
   if (typeof inputChatGptApiSmsPool !== 'undefined' && inputChatGptApiSmsPool) {
     inputChatGptApiSmsPool.value = normalizeHostedCheckoutSmsPoolTextValue(state?.chatGptApiSmsPoolText || '');
   }
   if (typeof inputChatGptApiSmsPoolAutoDisableEnabled !== 'undefined' && inputChatGptApiSmsPoolAutoDisableEnabled) {
     inputChatGptApiSmsPoolAutoDisableEnabled.checked = Boolean(state?.chatGptApiSmsPoolAutoDisableEnabled);
-  }
-  if (typeof inputHostedCheckoutFirstDirectResendEnabled !== 'undefined' && inputHostedCheckoutFirstDirectResendEnabled) {
-    inputHostedCheckoutFirstDirectResendEnabled.checked = Boolean(state?.hostedCheckoutFirstDirectResendEnabled);
-  }
-  if (typeof inputHostedCheckoutFirstResendWaitSeconds !== 'undefined' && inputHostedCheckoutFirstResendWaitSeconds) {
-    inputHostedCheckoutFirstResendWaitSeconds.value = String(
-      normalizeHostedCheckoutResendWaitSeconds(state?.hostedCheckoutFirstResendWaitSeconds, 20)
-    );
-  }
-  if (typeof inputHostedCheckoutSubsequentResendWaitSeconds !== 'undefined' && inputHostedCheckoutSubsequentResendWaitSeconds) {
-    inputHostedCheckoutSubsequentResendWaitSeconds.value = String(
-      normalizeHostedCheckoutResendWaitSeconds(state?.hostedCheckoutSubsequentResendWaitSeconds, 25)
-    );
-  }
-  if (typeof inputHostedCheckoutVerificationPollAttempts !== 'undefined' && inputHostedCheckoutVerificationPollAttempts) {
-    inputHostedCheckoutVerificationPollAttempts.value = String(
-      normalizeHostedCheckoutVerificationPollAttempts(state?.hostedCheckoutVerificationPollAttempts, 6)
-    );
-  }
-  if (typeof inputHostedCheckoutVerificationPollIntervalSeconds !== 'undefined' && inputHostedCheckoutVerificationPollIntervalSeconds) {
-    inputHostedCheckoutVerificationPollIntervalSeconds.value = String(
-      normalizeHostedCheckoutVerificationPollIntervalSeconds(state?.hostedCheckoutVerificationPollIntervalSeconds, 5)
-    );
-  }
-  if (typeof inputHostedCheckoutVerificationResendMaxAttempts !== 'undefined' && inputHostedCheckoutVerificationResendMaxAttempts) {
-    inputHostedCheckoutVerificationResendMaxAttempts.value = String(
-      normalizeHostedCheckoutVerificationResendMaxAttempts(state?.hostedCheckoutVerificationResendMaxAttempts, 1)
-    );
   }
   validateHostedCheckoutContactConfig();
   if (typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
@@ -12950,6 +13251,30 @@ async function openCustomVerificationConfirmDialog(step) {
 
 function getHotmailAccounts(state = latestState) {
   return Array.isArray(state?.hotmailAccounts) ? state.hotmailAccounts : [];
+}
+
+function preserveHotmailAccountsForSettingsSaveResponse(responseState = {}, requestPayload = {}) {
+  const nextState = responseState && typeof responseState === 'object' && !Array.isArray(responseState)
+    ? { ...responseState }
+    : {};
+  const payloadIncludesHotmailAccounts = Object.prototype.hasOwnProperty.call(requestPayload || {}, 'hotmailAccounts');
+  const payloadIncludesCurrentHotmail = Object.prototype.hasOwnProperty.call(requestPayload || {}, 'currentHotmailAccountId');
+  const currentHotmailAccounts = getHotmailAccounts(latestState);
+  const responseHotmailAccounts = getHotmailAccounts(nextState);
+
+  if (!payloadIncludesHotmailAccounts && currentHotmailAccounts.length > 0 && responseHotmailAccounts.length === 0) {
+    nextState.hotmailAccounts = currentHotmailAccounts;
+  }
+  if (
+    !payloadIncludesCurrentHotmail
+    && !nextState.currentHotmailAccountId
+    && latestState?.currentHotmailAccountId
+    && getHotmailAccounts(nextState).some((account) => account.id === latestState.currentHotmailAccountId)
+  ) {
+    nextState.currentHotmailAccountId = latestState.currentHotmailAccountId;
+  }
+
+  return nextState;
 }
 
 function getCurrentHotmailAccount(state = latestState) {
@@ -14804,12 +15129,12 @@ const hostedSmsPoolManager = window.SidepanelHostedSmsPoolManager?.createHostedS
       if (inputHostedCheckoutSmsPool) {
         inputHostedCheckoutSmsPool.value = normalized;
       }
-      syncLatestState({ hostedCheckoutSmsPoolText: normalized });
+      syncActivePlusCheckoutProfilePatch({ hostedCheckoutSmsPoolText: normalized });
       validateHostedCheckoutContactConfig();
     },
     getUsage: () => latestState?.hostedCheckoutSmsPoolUsage || {},
     setUsage: (usage) => {
-      syncLatestState({ hostedCheckoutSmsPoolUsage: usage && typeof usage === 'object' ? usage : {} });
+      syncActivePlusCheckoutProfilePatch({ hostedCheckoutSmsPoolUsage: usage && typeof usage === 'object' ? usage : {} });
     },
     getCurrentEntry: () => latestState?.hostedCheckoutCurrentSmsEntry || null,
     isVisible: () => Boolean(rowHostedCheckoutSmsPool) && rowHostedCheckoutSmsPool.style.display !== 'none',
@@ -14826,7 +15151,7 @@ const hostedSmsPoolManager = window.SidepanelHostedSmsPoolManager?.createHostedS
       if (inputHostedCheckoutPhone) {
         inputHostedCheckoutPhone.value = '';
       }
-      syncLatestState({
+      syncActivePlusCheckoutProfilePatch({
         hostedCheckoutVerificationUrl: '',
         hostedCheckoutPhoneNumber: '',
       });
@@ -16086,6 +16411,15 @@ inputPlusModeEnabled?.addEventListener('change', () => {
   validateHostedCheckoutContactConfig();
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
+});
+
+[inputPlusCheckoutModeUs, inputPlusCheckoutModeJp].filter(Boolean).forEach((input) => {
+  input.addEventListener('change', () => {
+    if (!input.checked) {
+      return;
+    }
+    handlePlusCheckoutModeSelectionChange(input.value);
+  });
 });
 
 inputOperationDelayEnabled?.addEventListener('change', () => {
@@ -17903,6 +18237,34 @@ async function handleHostedCheckoutManualFetch() {
   }
 }
 
+function handlePlusCheckoutModeSelectionChange(nextMode) {
+  const previousMode = getActivePlusCheckoutModeFromState(latestState);
+  const previousProfileDraft = buildPlusCheckoutProfileFromInputs();
+  syncPlusCheckoutProfileForModeIntoLatestState(previousMode, previousProfileDraft);
+  const normalizedMode = normalizePlusCheckoutModeValue(nextMode);
+  localPlusCheckoutMode = normalizedMode;
+  const normalizedState = normalizePlusCheckoutStateForUi({
+    ...(latestState || {}),
+    plusCheckoutMode: normalizedMode,
+  }, {
+    legacyOverrideSource: { plusCheckoutMode: normalizedMode },
+  });
+  syncLocalPlusCheckoutDraftFromState(normalizedState);
+  const nextProfile = normalizedState?.plusCheckoutProfiles?.[normalizedMode] || buildDefaultPlusCheckoutProfile();
+  syncLatestState({
+    plusCheckoutMode: normalizedMode,
+    plusCheckoutProfiles: localPlusCheckoutProfiles,
+    ...buildPlusCheckoutLegacyPatchFromProfile(nextProfile),
+  });
+  applyPlusCheckoutProfileToInputs(latestState, { mode: normalizedMode });
+  if (hostedSmsPoolExpanded && typeof queueHostedSmsPoolRefresh === 'function') {
+    queueHostedSmsPoolRefresh();
+  }
+  updatePlusModeUI();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+}
+
 inputAutoStepDelaySeconds.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -17965,12 +18327,18 @@ inputPlusCheckoutCloudConversionApiKey?.addEventListener('blur', () => {
 inputHostedCheckoutVerificationUrl?.addEventListener('input', () => {
   setHostedCheckoutManualCodeDisplay('未获取');
   validateHostedCheckoutContactConfig();
+  syncActivePlusCheckoutProfilePatch({
+    hostedCheckoutVerificationUrl: inputHostedCheckoutVerificationUrl.value,
+  });
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
 });
 inputHostedCheckoutVerificationUrl?.addEventListener('blur', () => {
   inputHostedCheckoutVerificationUrl.value = normalizeHostedCheckoutVerificationUrlValue(inputHostedCheckoutVerificationUrl.value);
   validateHostedCheckoutContactConfig();
+  syncActivePlusCheckoutProfilePatch({
+    hostedCheckoutVerificationUrl: inputHostedCheckoutVerificationUrl.value,
+  });
   saveSettings({ silent: true }).catch(() => { });
 });
 btnHostedCheckoutManualFetch?.addEventListener('click', () => {
@@ -17981,12 +18349,18 @@ btnHostedCheckoutManualFetch?.addEventListener('click', () => {
 
 inputHostedCheckoutPhone?.addEventListener('input', () => {
   validateHostedCheckoutContactConfig();
+  syncActivePlusCheckoutProfilePatch({
+    hostedCheckoutPhoneNumber: inputHostedCheckoutPhone.value,
+  });
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
 });
 inputHostedCheckoutPhone?.addEventListener('blur', () => {
   inputHostedCheckoutPhone.value = normalizeHostedCheckoutPhoneValue(inputHostedCheckoutPhone.value);
   validateHostedCheckoutContactConfig();
+  syncActivePlusCheckoutProfilePatch({
+    hostedCheckoutPhoneNumber: inputHostedCheckoutPhone.value,
+  });
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -18985,6 +19359,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.plusPaymentMethod !== undefined && selectPlusPaymentMethod) {
         selectPlusPaymentMethod.value = normalizePlusPaymentMethod(message.payload.plusPaymentMethod);
+      }
+      if (message.payload.plusCheckoutMode !== undefined || message.payload.plusCheckoutProfiles !== undefined) {
+        applyPlusCheckoutProfileToInputs(latestState, {
+          mode: latestState?.plusCheckoutMode,
+        });
+        if (hostedSmsPoolExpanded) {
+          queueHostedSmsPoolRefresh();
+        }
       }
       if (message.payload.gopayHelperPhoneMode !== undefined && selectGpcHelperPhoneMode) {
         selectGpcHelperPhoneMode.value = normalizeGpcHelperPhoneModeValue(message.payload.gopayHelperPhoneMode);

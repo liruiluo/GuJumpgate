@@ -248,6 +248,9 @@ function fillHostedOpenAiSelectByIdText(id, text) {
   const match = Array.from(select.options || []).find((option) => {
     const optionText = normalizeText(option?.textContent || option?.label || '');
     const optionValue = normalizeText(option?.value || '');
+    if (String(id || '').trim() === 'billingAdministrativeArea') {
+      return matchesRegionOption(optionText, expected) || matchesRegionOption(optionValue, expected);
+    }
     return optionText.toLowerCase().includes(expected.toLowerCase())
       || optionValue.toLowerCase().includes(expected.toLowerCase());
   });
@@ -257,6 +260,104 @@ function fillHostedOpenAiSelectByIdText(id, text) {
   select.value = match.value;
   select.dispatchEvent(new Event('change', { bubbles: true }));
   return true;
+}
+
+const HOSTED_OPENAI_JP_PREFECTURE_ALIASES = Object.freeze({
+  hokkaido: '北海道',
+  aomori: '青森県',
+  iwate: '岩手県',
+  miyagi: '宮城県',
+  akita: '秋田県',
+  yamagata: '山形県',
+  fukushima: '福島県',
+  ibaraki: '茨城県',
+  tochigi: '栃木県',
+  gunma: '群馬県',
+  saitama: '埼玉県',
+  chiba: '千葉県',
+  tokyo: '東京都',
+  kanagawa: '神奈川県',
+  niigata: '新潟県',
+  toyama: '富山県',
+  ishikawa: '石川県',
+  fukui: '福井県',
+  yamanashi: '山梨県',
+  nagano: '長野県',
+  gifu: '岐阜県',
+  shizuoka: '静岡県',
+  aichi: '愛知県',
+  mie: '三重県',
+  shiga: '滋賀県',
+  kyoto: '京都府',
+  osaka: '大阪府',
+  hyogo: '兵庫県',
+  nara: '奈良県',
+  wakayama: '和歌山県',
+  tottori: '鳥取県',
+  shimane: '島根県',
+  okayama: '岡山県',
+  hiroshima: '広島県',
+  yamaguchi: '山口県',
+  tokushima: '徳島県',
+  kagawa: '香川県',
+  ehime: '愛媛県',
+  kochi: '高知県',
+  fukuoka: '福岡県',
+  saga: '佐賀県',
+  nagasaki: '長崎県',
+  kumamoto: '熊本県',
+  oita: '大分県',
+  miyazaki: '宮崎県',
+  kagoshima: '鹿児島県',
+  okinawa: '沖縄県',
+});
+
+function normalizeHostedOpenAiJapanesePrefecture(value = '') {
+  const raw = normalizeText(value);
+  if (!raw) {
+    return '';
+  }
+  if (/[都道府県]$/.test(raw) && Object.values(HOSTED_OPENAI_JP_PREFECTURE_ALIASES).includes(raw)) {
+    return raw;
+  }
+  const compact = raw.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+  if (HOSTED_OPENAI_JP_PREFECTURE_ALIASES[compact]) {
+    return HOSTED_OPENAI_JP_PREFECTURE_ALIASES[compact];
+  }
+  return Object.entries(HOSTED_OPENAI_JP_PREFECTURE_ALIASES).find(([english, japanese]) => {
+    const japaneseCompact = japanese.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+    return compact === japaneseCompact || compact.includes(english) || compact.includes(japaneseCompact);
+  })?.[1] || '';
+}
+
+function getHostedOpenAiBillingAdministrativeAreaCandidates(address = {}) {
+  const candidates = [
+    address.prefecture,
+    address.stateFull,
+    address.State_Full,
+    address.state,
+    address.State,
+  ];
+  String(address.street || address.addressLine1 || '')
+    .split(',')
+    .map((part) => part.trim())
+    .reverse()
+    .forEach((part) => candidates.push(part));
+  return Array.from(new Set(candidates.flatMap((candidate) => {
+    const normalized = normalizeText(candidate);
+    const prefecture = normalizeHostedOpenAiJapanesePrefecture(normalized);
+    return [prefecture, normalized].filter(Boolean);
+  })));
+}
+
+function fillHostedOpenAiBillingAdministrativeArea(address = {}) {
+  const candidates = getHostedOpenAiBillingAdministrativeAreaCandidates(address);
+  for (const candidate of candidates) {
+    if (fillHostedOpenAiSelectByIdText('billingAdministrativeArea', candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function findHostedOpenAiPayPalButton() {
@@ -596,11 +697,14 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
   const contactEmail = String(payload.email || payload.registrationEmail || '').trim();
   const emailFillResult = await fillCheckoutContactEmail(contactEmail);
   const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
-  await selectCountryDropdown(findCountryDropdown(), 'US');
+  const addressCountryCode = String(address.countryCode || payload.countryCode || 'US').trim().toUpperCase() === 'JP'
+    ? 'JP'
+    : 'US';
+  await selectCountryDropdown(findCountryDropdown(), addressCountryCode);
   fillHostedOpenAiInputBySelector('#billingAddressLine1', address.street || '');
   fillHostedOpenAiInputBySelector('#billingLocality', address.city || '');
   fillHostedOpenAiInputBySelector('#billingPostalCode', address.zip || '');
-  fillHostedOpenAiSelectByIdText('billingAdministrativeArea', address.state || '');
+  fillHostedOpenAiBillingAdministrativeArea(address);
 
   const checkbox = document.getElementById('termsOfServiceConsentCheckbox');
   if (checkbox && !checkbox.checked) {

@@ -1097,6 +1097,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   plusModeEnabled: true,
   plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
   plusAccountAccessStrategy: PLUS_ACCOUNT_ACCESS_STRATEGY_OAUTH,
+  plusCheckoutMode: 'us_pp',
+  plusCheckoutProfiles: {},
   plusHostedCheckoutOauthDelaySeconds: 10,
   plusCheckoutCloudConversionEnabled: false,
   plusCheckoutCloudConversionApiUrl: BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL,
@@ -1319,6 +1321,110 @@ const PERSISTED_SETTING_DEFAULTS = {
   smsPoolPreferredPrice: '',
   phonePreferredActivation: null,
 };
+
+const PLUS_CHECKOUT_MODE_US_PP = 'us_pp';
+const PLUS_CHECKOUT_MODE_JP_PP = 'jp_pp';
+const DEFAULT_PLUS_CHECKOUT_MODE = PLUS_CHECKOUT_MODE_US_PP;
+const PLUS_CHECKOUT_PROFILE_SETTING_KEYS = Object.freeze([
+  'hostedCheckoutVerificationUrl',
+  'hostedCheckoutPhoneNumber',
+  'hostedCheckoutSmsPoolText',
+  'hostedCheckoutSmsPoolUsage',
+]);
+const PLUS_CHECKOUT_MODE_VALUES = Object.freeze([
+  PLUS_CHECKOUT_MODE_US_PP,
+  PLUS_CHECKOUT_MODE_JP_PP,
+]);
+
+function buildDefaultPlusCheckoutProfile() {
+  return {
+    hostedCheckoutVerificationUrl: '',
+    hostedCheckoutPhoneNumber: '',
+    hostedCheckoutSmsPoolText: '',
+    hostedCheckoutSmsPoolUsage: {},
+  };
+}
+
+function normalizePlusCheckoutMode(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === PLUS_CHECKOUT_MODE_JP_PP
+    ? PLUS_CHECKOUT_MODE_JP_PP
+    : DEFAULT_PLUS_CHECKOUT_MODE;
+}
+
+function normalizePlusCheckoutProfile(profile = {}, fallback = null) {
+  const rawProfile = profile && typeof profile === 'object' && !Array.isArray(profile)
+    ? profile
+    : {};
+  const baseProfile = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+    ? fallback
+    : buildDefaultPlusCheckoutProfile();
+  const normalizedProfile = {};
+  for (const key of PLUS_CHECKOUT_PROFILE_SETTING_KEYS) {
+    const sourceValue = Object.prototype.hasOwnProperty.call(rawProfile, key)
+      ? rawProfile[key]
+      : baseProfile[key];
+    normalizedProfile[key] = normalizePersistentSettingValue(key, sourceValue);
+  }
+  return normalizedProfile;
+}
+
+function buildLegacyPlusCheckoutProfileFromState(state = {}) {
+  const source = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+  return normalizePlusCheckoutProfile(Object.fromEntries(
+    PLUS_CHECKOUT_PROFILE_SETTING_KEYS.map((key) => [key, source[key]])
+  ));
+}
+
+function normalizePlusCheckoutProfiles(value = {}, fallbackState = {}) {
+  const rawProfiles = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {};
+  const legacyProfile = buildLegacyPlusCheckoutProfileFromState({
+    ...PERSISTED_SETTING_DEFAULTS,
+    ...(fallbackState && typeof fallbackState === 'object' && !Array.isArray(fallbackState) ? fallbackState : {}),
+  });
+  const hasUsProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_US_PP);
+  const hasJpProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_JP_PP);
+  const usProfile = hasUsProfile
+    ? normalizePlusCheckoutProfile(rawProfiles[PLUS_CHECKOUT_MODE_US_PP])
+    : normalizePlusCheckoutProfile(legacyProfile);
+  const jpProfile = hasJpProfile
+    ? normalizePlusCheckoutProfile(rawProfiles[PLUS_CHECKOUT_MODE_JP_PP])
+    : normalizePlusCheckoutProfile(hasUsProfile ? usProfile : legacyProfile);
+  return {
+    [PLUS_CHECKOUT_MODE_US_PP]: usProfile,
+    [PLUS_CHECKOUT_MODE_JP_PP]: jpProfile,
+  };
+}
+
+function buildPlusCheckoutLegacyFieldMirror(profile = {}) {
+  const normalizedProfile = normalizePlusCheckoutProfile(profile);
+  return Object.fromEntries(
+    PLUS_CHECKOUT_PROFILE_SETTING_KEYS.map((key) => [key, normalizedProfile[key]])
+  );
+}
+
+function applyActivePlusCheckoutProfileToState(state = {}) {
+  const source = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+  const mode = normalizePlusCheckoutMode(source.plusCheckoutMode);
+  const profiles = normalizePlusCheckoutProfiles(source.plusCheckoutProfiles, source);
+  const activeProfileFromLegacy = buildLegacyPlusCheckoutProfileFromState(source);
+  const activeProfile = normalizePlusCheckoutProfile({
+    ...(profiles[mode] || {}),
+    ...activeProfileFromLegacy,
+  }, profiles[mode] || activeProfileFromLegacy);
+  const nextProfiles = {
+    ...profiles,
+    [mode]: activeProfile,
+  };
+  return {
+    ...source,
+    plusCheckoutMode: mode,
+    plusCheckoutProfiles: nextProfiles,
+    ...buildPlusCheckoutLegacyFieldMirror(activeProfile),
+  };
+}
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
@@ -3605,6 +3711,10 @@ function normalizePersistentSettingValue(key, value) {
       return normalizePlusPaymentMethod(value);
     case 'plusAccountAccessStrategy':
       return normalizePlusAccountAccessStrategy(value);
+    case 'plusCheckoutMode':
+      return normalizePlusCheckoutMode(value);
+    case 'plusCheckoutProfiles':
+      return normalizePlusCheckoutProfiles(value || {});
     case 'plusHostedCheckoutOauthDelaySeconds':
       return normalizePlusHostedCheckoutOauthDelaySeconds(
         value,
@@ -4345,6 +4455,21 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     payload.ipProxyRegion = String(activeProfile?.region || payload.ipProxyRegion || '').trim();
   }
 
+  const hasPlusCheckoutProfileUpdates = fillDefaults
+    || Object.prototype.hasOwnProperty.call(normalizedInput, 'plusCheckoutMode')
+    || Object.prototype.hasOwnProperty.call(normalizedInput, 'plusCheckoutProfiles')
+    || PLUS_CHECKOUT_PROFILE_SETTING_KEYS.some((key) => (
+      Object.prototype.hasOwnProperty.call(normalizedInput, key)
+      || Object.prototype.hasOwnProperty.call(payload, key)
+    ));
+  if (hasPlusCheckoutProfileUpdates) {
+    Object.assign(payload, applyActivePlusCheckoutProfileToState({
+      ...PERSISTED_SETTING_DEFAULTS,
+      ...normalizedInput,
+      ...payload,
+    }));
+  }
+
   return payload;
 }
 
@@ -4437,11 +4562,23 @@ async function setState(updates) {
       await chrome.storage.local.set(persistentAliasUpdates);
     }
     if (Object.prototype.hasOwnProperty.call(sessionUpdates, 'hostedCheckoutSmsPoolUsage')) {
-      await chrome.storage.local.set({
+      const persistedCheckoutProfileState = await chrome.storage.local.get([
+        'plusCheckoutMode',
+        'plusCheckoutProfiles',
+        ...PLUS_CHECKOUT_PROFILE_SETTING_KEYS,
+      ]).catch(() => ({}));
+      const nextPersistedState = applyActivePlusCheckoutProfileToState({
+        ...PERSISTED_SETTING_DEFAULTS,
+        ...persistedCheckoutProfileState,
         hostedCheckoutSmsPoolUsage: normalizePersistentSettingValue(
           'hostedCheckoutSmsPoolUsage',
           sessionUpdates.hostedCheckoutSmsPoolUsage
         ),
+      });
+      await chrome.storage.local.set({
+        plusCheckoutMode: nextPersistedState.plusCheckoutMode,
+        plusCheckoutProfiles: nextPersistedState.plusCheckoutProfiles,
+        hostedCheckoutSmsPoolUsage: nextPersistedState.hostedCheckoutSmsPoolUsage,
       });
     }
   }

@@ -1895,6 +1895,13 @@
         case 'SAVE_SETTING': {
           const currentState = await getState();
           const updates = buildPersistentSettingsPayload(message.payload || {});
+          if (
+            Object.prototype.hasOwnProperty.call(updates, 'hotmailAccounts')
+            && normalizeHotmailAccounts(updates.hotmailAccounts).length === 0
+            && normalizeHotmailAccounts(currentState.hotmailAccounts).length > 0
+          ) {
+            delete updates.hotmailAccounts;
+          }
           const sessionUpdates = buildLuckmailSessionSettingsPayload(message.payload || {});
           const modeValidation = validateModeSwitch({
             ...currentState,

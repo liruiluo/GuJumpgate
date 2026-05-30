@@ -2212,6 +2212,63 @@ header {
   justify-content: flex-end;
 }
 
+.plus-checkout-mode-switch-group {
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.plus-checkout-mode-switch-caption {
+  flex: 0 0 auto;
+}
+
+.plus-checkout-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.plus-checkout-mode-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.plus-checkout-mode-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plus-checkout-mode-option span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));
+  border-radius: 999px;
+  background: var(--surface-muted, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.78));
+  font-size: 12px;
+  line-height: 1.2;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.plus-checkout-mode-option input:checked + span {
+  border-color: rgba(95, 188, 255, 0.5);
+  background: rgba(95, 188, 255, 0.14);
+  color: var(--text-primary, #fff);
+  box-shadow: 0 0 0 1px rgba(95, 188, 255, 0.18) inset;
+}
+
+.plus-checkout-mode-option input:disabled + span {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .auto-delay-setting-pair {
   flex-wrap: nowrap;
 }

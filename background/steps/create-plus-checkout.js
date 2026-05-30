@@ -9,6 +9,13 @@
   const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
   const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+  const PLUS_CHECKOUT_MODE_US_PP = 'us_pp';
+  const PLUS_CHECKOUT_MODE_JP_PP = 'jp_pp';
+  const DEFAULT_PLUS_CHECKOUT_MODE = PLUS_CHECKOUT_MODE_US_PP;
+  const PLUS_CHECKOUT_MODE_LABELS = Object.freeze({
+    [PLUS_CHECKOUT_MODE_US_PP]: '美区PP Plus Checkout',
+    [PLUS_CHECKOUT_MODE_JP_PP]: '日区PP Plus Checkout',
+  });
   const PLUS_ACCOUNT_ACCESS_STRATEGY_SMS_OAUTH = 'sms_oauth';
   const DEFAULT_GPC_HELPER_API_URL = 'https://your-gpc-helper-domain.example';
   const BUILTIN_PLUS_CHECKOUT_CLOUD_CONVERSION_API_URL = 'https://gujumpgate.zg.fyi/api/checkout';
@@ -68,6 +75,12 @@
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT_PREFIX = 'HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::';
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_MAX_ATTEMPTS_DEFAULT = 1;
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_MAX_ATTEMPTS_LIMIT = 10;
+  const PLUS_CHECKOUT_PROFILE_SETTING_KEYS = Object.freeze([
+    'hostedCheckoutVerificationUrl',
+    'hostedCheckoutPhoneNumber',
+    'hostedCheckoutSmsPoolText',
+    'hostedCheckoutSmsPoolUsage',
+  ]);
   const CHECKOUT_CONVERSION_PROXY_SETTINGS_SCOPE = 'regular';
   const CHECKOUT_CONVERSION_PROXY_BYPASS_LIST = ['<local>', 'localhost', '127.0.0.1'];
   const CHECKOUT_CONVERSION_PROXY_TARGET_HOST_PATTERNS = [
@@ -149,6 +162,105 @@
         return PLUS_PAYMENT_METHOD_GPC_HELPER;
       }
       return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
+    }
+
+    function normalizePlusCheckoutMode(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized === PLUS_CHECKOUT_MODE_JP_PP
+        ? PLUS_CHECKOUT_MODE_JP_PP
+        : DEFAULT_PLUS_CHECKOUT_MODE;
+    }
+
+    function normalizePlusHostedCheckoutOauthDelaySeconds(value, fallback = 10) {
+      const numeric = Number.parseInt(String(value ?? '').trim(), 10);
+      if (!Number.isFinite(numeric)) {
+        return Math.max(0, Math.min(3600, Number(fallback) || 10));
+      }
+      return Math.max(0, Math.min(3600, numeric));
+    }
+
+    function getPlusCheckoutModeLabel(value = '') {
+      return PLUS_CHECKOUT_MODE_LABELS[normalizePlusCheckoutMode(value)]
+        || PLUS_CHECKOUT_MODE_LABELS[DEFAULT_PLUS_CHECKOUT_MODE];
+    }
+
+    function buildDefaultPlusCheckoutProfile() {
+      return {
+        hostedCheckoutVerificationUrl: '',
+        hostedCheckoutPhoneNumber: '',
+        hostedCheckoutSmsPoolText: '',
+        hostedCheckoutSmsPoolUsage: {},
+      };
+    }
+
+    function buildLegacyPlusCheckoutProfileFromState(state = {}) {
+      const source = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+      return {
+        hostedCheckoutVerificationUrl: String(source.hostedCheckoutVerificationUrl || '').trim(),
+        hostedCheckoutPhoneNumber: String(source.hostedCheckoutPhoneNumber || '').trim(),
+        hostedCheckoutSmsPoolText: normalizeHostedCheckoutPoolText(source.hostedCheckoutSmsPoolText || ''),
+        hostedCheckoutSmsPoolUsage: normalizeHostedCheckoutSmsPoolUsage(source.hostedCheckoutSmsPoolUsage || {}),
+      };
+    }
+
+    function normalizePlusCheckoutProfile(profile = {}, fallback = null) {
+      const rawProfile = profile && typeof profile === 'object' && !Array.isArray(profile)
+        ? profile
+        : {};
+      const baseProfile = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+        ? fallback
+        : buildDefaultPlusCheckoutProfile();
+      return {
+        hostedCheckoutVerificationUrl: String(
+          rawProfile.hostedCheckoutVerificationUrl ?? baseProfile.hostedCheckoutVerificationUrl ?? ''
+        ).trim(),
+        hostedCheckoutPhoneNumber: String(
+          rawProfile.hostedCheckoutPhoneNumber ?? baseProfile.hostedCheckoutPhoneNumber ?? ''
+        ).trim(),
+        hostedCheckoutSmsPoolText: normalizeHostedCheckoutPoolText(
+          rawProfile.hostedCheckoutSmsPoolText ?? baseProfile.hostedCheckoutSmsPoolText ?? ''
+        ),
+        hostedCheckoutSmsPoolUsage: normalizeHostedCheckoutSmsPoolUsage(
+          rawProfile.hostedCheckoutSmsPoolUsage ?? baseProfile.hostedCheckoutSmsPoolUsage ?? {}
+        ),
+      };
+    }
+
+    function resolveActivePlusCheckoutProfile(state = {}, stored = {}) {
+      const sourceState = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+      const storedState = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+      const mode = normalizePlusCheckoutMode(storedState.plusCheckoutMode ?? sourceState.plusCheckoutMode);
+      const rawProfiles = storedState.plusCheckoutProfiles && typeof storedState.plusCheckoutProfiles === 'object'
+        ? storedState.plusCheckoutProfiles
+        : (sourceState.plusCheckoutProfiles && typeof sourceState.plusCheckoutProfiles === 'object'
+          ? sourceState.plusCheckoutProfiles
+          : {});
+      const legacyProfile = buildLegacyPlusCheckoutProfileFromState({
+        ...sourceState,
+        ...storedState,
+      });
+      const hasUsProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_US_PP);
+      const hasJpProfile = Object.prototype.hasOwnProperty.call(rawProfiles, PLUS_CHECKOUT_MODE_JP_PP);
+      const profiles = {
+        [PLUS_CHECKOUT_MODE_US_PP]: hasUsProfile
+          ? normalizePlusCheckoutProfile(rawProfiles[PLUS_CHECKOUT_MODE_US_PP])
+          : normalizePlusCheckoutProfile(legacyProfile),
+        [PLUS_CHECKOUT_MODE_JP_PP]: hasJpProfile
+          ? normalizePlusCheckoutProfile(rawProfiles[PLUS_CHECKOUT_MODE_JP_PP])
+          : normalizePlusCheckoutProfile(hasUsProfile
+            ? normalizePlusCheckoutProfile(rawProfiles[PLUS_CHECKOUT_MODE_US_PP])
+            : legacyProfile),
+      };
+      const activeProfile = profiles[mode] || legacyProfile;
+      return {
+        mode,
+        modeLabel: getPlusCheckoutModeLabel(mode),
+        profiles: {
+          ...profiles,
+          [mode]: activeProfile,
+        },
+        activeProfile,
+      };
     }
 
     function isSmsOauthCheckoutState(state = {}) {
@@ -1661,6 +1773,8 @@ function FindProxyForURL(url, host) {
       let stored = {};
       if (chrome?.storage?.local?.get) {
         stored = await chrome.storage.local.get([
+          'plusCheckoutMode',
+          'plusCheckoutProfiles',
           'hostedCheckoutVerificationUrl',
           'hostedCheckoutPhoneNumber',
           'hostedCheckoutSmsPoolText',
@@ -1674,15 +1788,13 @@ function FindProxyForURL(url, host) {
           'hostedCheckoutVerificationPollIntervalSeconds',
         ]).catch(() => ({}));
       }
+      const checkoutProfileState = resolveActivePlusCheckoutProfile(state, stored);
+      const activeProfile = checkoutProfileState.activeProfile;
       const poolEntries = parseHostedCheckoutSmsPoolEntries(
-        stored?.hostedCheckoutSmsPoolText
-        || state?.hostedCheckoutSmsPoolText
-        || ''
+        activeProfile.hostedCheckoutSmsPoolText || ''
       );
       const poolUsage = normalizeHostedCheckoutSmsPoolUsage(
-        stored?.hostedCheckoutSmsPoolUsage
-        || state?.hostedCheckoutSmsPoolUsage
-        || {}
+        activeProfile.hostedCheckoutSmsPoolUsage || {}
       );
       let selectedSmsEntry = normalizeHostedCheckoutCurrentSmsEntry(state?.hostedCheckoutCurrentSmsEntry, poolEntries);
       if (selectedSmsEntry) {
@@ -1713,11 +1825,7 @@ function FindProxyForURL(url, host) {
             : ''
         )
         || ''
-      ).trim() || String(
-        stored?.hostedCheckoutVerificationUrl
-        || state?.hostedCheckoutVerificationUrl
-        || ''
-      ).trim();
+      ).trim() || String(activeProfile.hostedCheckoutVerificationUrl || '').trim();
       const phone = String(
         selectedSmsEntry?.phone
         || (
@@ -1726,42 +1834,44 @@ function FindProxyForURL(url, host) {
             : ''
         )
         || ''
-      ).trim() || String(
-        stored?.hostedCheckoutPhoneNumber
-        || state?.hostedCheckoutPhoneNumber
-        || ''
-      ).trim();
+      ).trim() || String(activeProfile.hostedCheckoutPhoneNumber || '').trim();
       const hostedCheckoutSmsPoolAutoDisableEnabled = Boolean(
-        stored?.hostedCheckoutSmsPoolAutoDisableEnabled ?? state?.hostedCheckoutSmsPoolAutoDisableEnabled
+        activeProfile.hostedCheckoutSmsPoolAutoDisableEnabled
       );
       const firstDirectResendEnabled = Boolean(
-        stored?.hostedCheckoutFirstDirectResendEnabled ?? state?.hostedCheckoutFirstDirectResendEnabled
+        activeProfile.hostedCheckoutFirstDirectResendEnabled
       );
       const firstResendWaitSeconds = normalizeHostedCheckoutResendWaitSeconds(
-        stored?.hostedCheckoutFirstResendWaitSeconds ?? state?.hostedCheckoutFirstResendWaitSeconds,
+        activeProfile.hostedCheckoutFirstResendWaitSeconds,
         HOSTED_CHECKOUT_FIRST_RESEND_WAIT_DEFAULT_SECONDS
       );
       const subsequentResendWaitSeconds = normalizeHostedCheckoutResendWaitSeconds(
-        stored?.hostedCheckoutSubsequentResendWaitSeconds ?? state?.hostedCheckoutSubsequentResendWaitSeconds,
+        activeProfile.hostedCheckoutSubsequentResendWaitSeconds,
         HOSTED_CHECKOUT_SUBSEQUENT_RESEND_WAIT_DEFAULT_SECONDS
       );
       const verificationResendMaxAttempts = normalizeHostedCheckoutVerificationResendMaxAttempts(
-        stored?.hostedCheckoutVerificationResendMaxAttempts ?? state?.hostedCheckoutVerificationResendMaxAttempts
+        activeProfile.hostedCheckoutVerificationResendMaxAttempts
       );
       const verificationPollAttempts = normalizeHostedCheckoutVerificationPollAttempts(
-        stored?.hostedCheckoutVerificationPollAttempts ?? state?.hostedCheckoutVerificationPollAttempts
+        activeProfile.hostedCheckoutVerificationPollAttempts
       );
       const verificationPollIntervalSeconds = normalizeHostedCheckoutVerificationPollIntervalSeconds(
-        stored?.hostedCheckoutVerificationPollIntervalSeconds ?? state?.hostedCheckoutVerificationPollIntervalSeconds
+        activeProfile.hostedCheckoutVerificationPollIntervalSeconds
       );
       const diagnostics = buildHostedCheckoutConfigDiagnostics({
         state,
-        stored,
+        stored: {
+          ...stored,
+          ...activeProfile,
+          plusCheckoutMode: checkoutProfileState.mode,
+        },
         poolEntries,
         poolUsage,
         selectedSmsEntry,
       });
       return {
+        plusCheckoutMode: checkoutProfileState.mode,
+        plusCheckoutModeLabel: checkoutProfileState.modeLabel,
         verificationUrl,
         phone,
         hostedCheckoutSmsPoolAutoDisableEnabled,
@@ -1883,6 +1993,19 @@ function FindProxyForURL(url, host) {
       return values.sort(() => Math.random() - 0.5).join('');
     }
 
+    function normalizeHostedCheckoutSignupPassword(value = '') {
+      const normalized = String(value || '').replace(/\s+/g, '').trim();
+      if (
+        normalized.length >= 8
+        && normalized.length <= 20
+        && /^[A-Za-z0-9!@#$%^]+$/.test(normalized)
+        && /[\d!@#$%^]/.test(normalized)
+      ) {
+        return normalized;
+      }
+      return buildHostedCheckoutRandomPassword();
+    }
+
     function buildHostedCheckoutVisaCard() {
       const prefixes = [
         [4, 1, 4, 7],
@@ -1917,7 +2040,217 @@ function FindProxyForURL(url, host) {
       };
     }
 
-    async function fetchHostedCheckoutAddress() {
+    function getHostedCheckoutAddressCountryCode(value = '') {
+      const normalized = String(value || '').trim().toUpperCase();
+      return normalized === 'JP' ? 'JP' : 'US';
+    }
+
+    function getHostedCheckoutAddressCountryCodeForMode(mode = '') {
+      return normalizePlusCheckoutMode(mode) === PLUS_CHECKOUT_MODE_JP_PP ? 'JP' : 'US';
+    }
+
+    function getHostedCheckoutAddressApiPath(countryCode = 'US') {
+      return getHostedCheckoutAddressCountryCode(countryCode) === 'JP' ? '/jp-address' : '/';
+    }
+
+    function getHostedCheckoutAddressFallback(countryCode = 'US') {
+      return getHostedCheckoutAddressCountryCode(countryCode) === 'JP'
+        ? {
+          street: '1-1 Chiyoda',
+          city: 'Chiyoda-ku',
+          state: '東京都',
+          zip: '1000001',
+        }
+        : {
+          street: '123 Main St',
+          city: 'New York',
+          state: 'New York',
+          zip: '10001',
+      };
+    }
+
+    const HOSTED_CHECKOUT_JP_PREFECTURE_ALIASES = Object.freeze({
+      hokkaido: '北海道',
+      aomori: '青森県',
+      iwate: '岩手県',
+      miyagi: '宮城県',
+      akita: '秋田県',
+      yamagata: '山形県',
+      fukushima: '福島県',
+      ibaraki: '茨城県',
+      tochigi: '栃木県',
+      gunma: '群馬県',
+      saitama: '埼玉県',
+      chiba: '千葉県',
+      tokyo: '東京都',
+      kanagawa: '神奈川県',
+      niigata: '新潟県',
+      toyama: '富山県',
+      ishikawa: '石川県',
+      fukui: '福井県',
+      yamanashi: '山梨県',
+      nagano: '長野県',
+      gifu: '岐阜県',
+      shizuoka: '静岡県',
+      aichi: '愛知県',
+      mie: '三重県',
+      shiga: '滋賀県',
+      kyoto: '京都府',
+      osaka: '大阪府',
+      hyogo: '兵庫県',
+      nara: '奈良県',
+      wakayama: '和歌山県',
+      tottori: '鳥取県',
+      shimane: '島根県',
+      okayama: '岡山県',
+      hiroshima: '広島県',
+      yamaguchi: '山口県',
+      tokushima: '徳島県',
+      kagawa: '香川県',
+      ehime: '愛媛県',
+      kochi: '高知県',
+      fukuoka: '福岡県',
+      saga: '佐賀県',
+      nagasaki: '長崎県',
+      kumamoto: '熊本県',
+      oita: '大分県',
+      miyazaki: '宮崎県',
+      kagoshima: '鹿児島県',
+      okinawa: '沖縄県',
+    });
+
+    function normalizeHostedCheckoutJapanesePrefecture(value = '') {
+      const raw = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!raw) {
+        return '';
+      }
+      if (/[都道府県]$/.test(raw) && Object.values(HOSTED_CHECKOUT_JP_PREFECTURE_ALIASES).includes(raw)) {
+        return raw;
+      }
+      const compact = raw.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+      if (HOSTED_CHECKOUT_JP_PREFECTURE_ALIASES[compact]) {
+        return HOSTED_CHECKOUT_JP_PREFECTURE_ALIASES[compact];
+      }
+      return Object.entries(HOSTED_CHECKOUT_JP_PREFECTURE_ALIASES).find(([english, japanese]) => {
+        const japaneseCompact = japanese.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+        return compact === japaneseCompact || compact.includes(english) || compact.includes(japaneseCompact);
+      })?.[1] || '';
+    }
+
+    function resolveHostedCheckoutJapanesePrefecture(address = {}, fallback = '') {
+      const candidates = [
+        address.State_Full,
+        address.State,
+        address.state,
+        ...String(address.Trans_Address || address.Address || address.street || '')
+          .split(',')
+          .map((part) => part.trim())
+          .reverse(),
+      ];
+      for (const candidate of candidates) {
+        const prefecture = normalizeHostedCheckoutJapanesePrefecture(candidate);
+        if (prefecture) {
+          return prefecture;
+        }
+      }
+      return normalizeHostedCheckoutJapanesePrefecture(fallback) || fallback;
+    }
+
+    function normalizeHostedCheckoutPostalCode(value = '', countryCode = 'US') {
+      const normalized = String(value || '').trim();
+      if (getHostedCheckoutAddressCountryCode(countryCode) === 'JP') {
+        return normalized.replace(/[^\d-]/g, '').slice(0, 8);
+      }
+      return normalized.slice(0, 5);
+    }
+
+    function normalizeHostedCheckoutCardExpiry(value = '') {
+      const rawValue = String(value || '').trim();
+      const match = rawValue.match(/(\d{1,2})\D+(\d{2,4})/);
+      if (!match) {
+        return '';
+      }
+      const monthNumber = Math.max(1, Math.min(12, Number.parseInt(match[1], 10) || 1));
+      const month = String(monthNumber).padStart(2, '0');
+      const year = String(match[2] || '').slice(-2).padStart(2, '0');
+      return `${month} / ${year}`;
+    }
+
+    function normalizeHostedCheckoutDateOfBirth(value = '') {
+      const rawValue = String(value || '').trim();
+      const match = rawValue.match(/(\d{1,4})\D+(\d{1,2})\D+(\d{1,4})/);
+      if (!match) {
+        return '';
+      }
+      const first = Number.parseInt(match[1], 10);
+      const second = Number.parseInt(match[2], 10);
+      const third = Number.parseInt(match[3], 10);
+      const year = match[1].length === 4 ? first : third;
+      const month = match[1].length === 4 ? second : first;
+      const day = match[1].length === 4 ? third : second;
+      if (!Number.isFinite(year) || year < 1900 || year > 2008 || month < 1 || month > 12 || day < 1 || day > 31) {
+        return '';
+      }
+      return `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${String(year).padStart(4, '0')}`;
+    }
+
+    function normalizeHostedCheckoutLatinNamePart(value = '', fallback = '') {
+      const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+      const compact = normalized.replace(/[^A-Za-z]/g, '').toUpperCase();
+      const blockedNameParts = new Set([
+        'ADMIN',
+        'CHATGPT',
+        'CUSTOMER',
+        'DEMO',
+        'FIRST',
+        'LAST',
+        'NAME',
+        'NONE',
+        'NULL',
+        'OPENAI',
+        'PAYPAL',
+        'PRD',
+        'PROD',
+        'PRODUCTION',
+        'SAMPLE',
+        'STRIPE',
+        'TEST',
+        'UNKNOWN',
+        'USER',
+      ]);
+      if (
+        /^[A-Za-z][A-Za-z\s'-]{1,98}$/.test(normalized)
+        && !blockedNameParts.has(compact)
+        && !(/^[A-Z]{3,6}$/.test(compact) && !/[AEIOUY]/.test(compact))
+      ) {
+        return normalized.replace(/\b[A-Z]{2,}\b/g, (part) => (
+          part.charAt(0) + part.slice(1).toLowerCase()
+        ));
+      }
+      return fallback;
+    }
+
+    function splitHostedCheckoutFullName(fullName = '') {
+      const parts = String(fullName || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+      if (parts.length >= 2) {
+        return {
+          firstName: parts.slice(0, -1).join(' '),
+          lastName: parts[parts.length - 1],
+        };
+      }
+      if (parts.length === 1) {
+        return {
+          firstName: parts[0],
+          lastName: 'Customer',
+        };
+      }
+      return {
+        firstName: '',
+        lastName: '',
+      };
+    }
+
+    async function fetchHostedCheckoutRawAddress(countryCode = 'US') {
       const { response, data } = await fetchJsonWithTimeout(HOSTED_CHECKOUT_ADDRESS_ENDPOINT, {
         method: 'POST',
         headers: {
@@ -1925,19 +2258,63 @@ function FindProxyForURL(url, host) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          path: '/',
+          path: getHostedCheckoutAddressApiPath(countryCode),
           method: 'address',
         }),
       }, 30000);
       if (!response?.ok) {
         throw new Error(`获取 hosted checkout 地址失败（HTTP ${response?.status || 0}）。`);
       }
-      const address = data?.address || data || {};
+      return data?.address || data || {};
+    }
+
+    async function fetchHostedCheckoutEnglishIdentity() {
+      try {
+        const address = await fetchHostedCheckoutRawAddress('US');
+        const fullName = String(address.Full_Name || address.Full_Name_Tran || '').replace(/\s+/g, ' ').trim();
+        const nameParts = splitHostedCheckoutFullName(fullName);
+        const firstName = normalizeHostedCheckoutLatinNamePart(nameParts.firstName, 'James');
+        const lastName = normalizeHostedCheckoutLatinNamePart(nameParts.lastName, 'Smith');
+        return {
+          fullName: `${firstName} ${lastName}`,
+          firstName,
+          lastName,
+        };
+      } catch {
+        return {
+          fullName: 'James Smith',
+          firstName: 'James',
+          lastName: 'Smith',
+        };
+      }
+    }
+
+    async function fetchHostedCheckoutAddress(options = {}) {
+      const countryCode = getHostedCheckoutAddressCountryCode(options?.countryCode);
+      const fallback = getHostedCheckoutAddressFallback(countryCode);
+      const address = await fetchHostedCheckoutRawAddress(countryCode);
+      const englishIdentity = countryCode === 'JP' ? await fetchHostedCheckoutEnglishIdentity() : null;
+      const fullName = String(address.Full_Name_Tran || address.Full_Name || '').replace(/\s+/g, ' ').trim();
+      const nameParts = splitHostedCheckoutFullName(fullName);
+      const firstName = englishIdentity?.firstName || normalizeHostedCheckoutLatinNamePart(nameParts.firstName, 'James');
+      const lastName = englishIdentity?.lastName || normalizeHostedCheckoutLatinNamePart(nameParts.lastName, 'Smith');
       return {
-        street: String(address.Address || address.street || '123 Main St').trim(),
-        city: String(address.City || address.city || 'New York').trim(),
-        state: String(address.State_Full || address.State || address.state || 'New York').trim(),
-        zip: String(address.Zip_Code || address.zip || '10001').trim().slice(0, 5) || '10001',
+        countryCode,
+        street: String(address.Trans_Address || address.Address || address.street || fallback.street).trim(),
+        city: String(address.City || address.city || fallback.city).trim(),
+        state: countryCode === 'JP'
+          ? resolveHostedCheckoutJapanesePrefecture(address, fallback.state)
+          : String(address.State_Full || address.State || address.state || fallback.state).trim(),
+        zip: normalizeHostedCheckoutPostalCode(address.Zip_Code || address.zip || fallback.zip, countryCode) || fallback.zip,
+        fullName: englishIdentity?.fullName || `${firstName} ${lastName}`,
+        firstName,
+        lastName,
+        email: '',
+        password: normalizeHostedCheckoutSignupPassword(address.Password || address.password || ''),
+        cardNumber: String(address.Credit_Card_Number || address.cardNumber || '').replace(/\D+/g, ''),
+        cardExpiry: normalizeHostedCheckoutCardExpiry(address.Expires || address.cardExpiry || ''),
+        cardCvv: String(address.CVV2 || address.cardCvv || '').replace(/\D+/g, '').slice(0, 4),
+        dateOfBirth: normalizeHostedCheckoutDateOfBirth(address.Birthday || address.dateOfBirth || ''),
       };
     }
 
@@ -1958,25 +2335,49 @@ function FindProxyForURL(url, host) {
     function buildHostedCheckoutGuestProfile(address = {}, config = {}) {
       const card = buildHostedCheckoutVisaCard();
       return {
-        email: buildHostedCheckoutRandomEmail(),
-        password: buildHostedCheckoutRandomPassword(),
+        email: String(address.email || '').trim() || buildHostedCheckoutRandomEmail(),
+        password: normalizeHostedCheckoutSignupPassword(address.password || ''),
         phone: String(config?.phone || '').trim(),
-        firstName: 'James',
-        lastName: 'Smith',
-        fullName: 'James Smith',
-        cardNumber: card.number,
-        cardExpiry: card.expiry,
-        cardCvv: card.cvv,
+        firstName: normalizeHostedCheckoutLatinNamePart(address.firstName, 'James'),
+        lastName: normalizeHostedCheckoutLatinNamePart(address.lastName, 'Smith'),
+        fullName: [
+          normalizeHostedCheckoutLatinNamePart(address.firstName, 'James'),
+          normalizeHostedCheckoutLatinNamePart(address.lastName, 'Smith'),
+        ].join(' '),
+        cardNumber: String(address.cardNumber || '').replace(/\D+/g, '') || card.number,
+        cardExpiry: String(address.cardExpiry || '').trim() || card.expiry,
+        cardCvv: String(address.cardCvv || '').replace(/\D+/g, '').slice(0, 4) || card.cvv,
+        dateOfBirth: String(address.dateOfBirth || '').trim(),
         address,
       };
     }
 
     function extractHostedCheckoutVerificationCode(payload = {}) {
-      const trustedTextKeyPattern = /^(sms|message|msg|text|content|body|code|otp|verification_code|verificationCode)$/i;
+      const trustedTextKeyPattern = /^(sms|smsCode|sms_code|message|msg|text|content|body|code|otp|verification_code|verificationCode)$/i;
       const metadataKeyPattern = /(^|[_-])(phone|mobile|tel|id|order|time|date|expired|expire|status)([_-]|$)/i;
-      const contextualCodePattern = /(?:security\s*code|verification\s*code|one[-\s]?time\s*(?:passcode|code)|passcode|otp|code|验证码|安全码)[\s\S]{0,50}?(\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d)|(\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d)[\s\S]{0,50}?(?:security\s*code|verification\s*code|one[-\s]?time\s*(?:passcode|code)|passcode|otp|code|验证码|安全码)/i;
       const exactCodePattern = /^\D*(\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d)\D*$/;
       const seen = new Set();
+      const blockedExampleCodes = new Set([
+        '000000',
+        '012345',
+        '111111',
+        '222222',
+        '333333',
+        '444444',
+        '555555',
+        '666666',
+        '777777',
+        '888888',
+        '999999',
+      ]);
+
+      function normalizeCandidateCode(value = '') {
+        const code = String(value || '').replace(/\D+/g, '');
+        if (code.length !== 6 || blockedExampleCodes.has(code)) {
+          return '';
+        }
+        return code;
+      }
 
       function collectCandidates(value, path = '') {
         if (value === null || value === undefined) {
@@ -2006,8 +2407,22 @@ function FindProxyForURL(url, host) {
       }
 
       function extractContextualCode(text) {
-        const match = String(text || '').match(contextualCodePattern);
-        return match ? (match[1] || match[2]).replace(/\D+/g, '') : '';
+        const source = String(text || '');
+        const contextualPatterns = [
+          /(\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d)[\s\S]{0,80}?(?:security\s*code|verification\s*code|one[-\s]?time\s*(?:passcode|code)|passcode|otp|code|验证码|安全码)/gi,
+          /(?:security\s*code|verification\s*code|one[-\s]?time\s*(?:passcode|code)|passcode|otp|code|验证码|安全码)[^\d]{0,24}(\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d[\s-]?\d)/gi,
+        ];
+        for (const pattern of contextualPatterns) {
+          let match = pattern.exec(source);
+          while (match) {
+            const code = normalizeCandidateCode(match[1]);
+            if (code) {
+              return code;
+            }
+            match = pattern.exec(source);
+          }
+        }
+        return '';
       }
 
       const candidates = collectCandidates(payload);
@@ -2028,7 +2443,10 @@ function FindProxyForURL(url, host) {
         }
         const match = candidate.text.match(exactCodePattern);
         if (match) {
-          return match[1].replace(/\D+/g, '');
+          const code = normalizeCandidateCode(match[1]);
+          if (code) {
+            return code;
+          }
         }
       }
 
@@ -2189,7 +2607,7 @@ function FindProxyForURL(url, host) {
           error.message = `浏览器标签页兜底取码未解析到验证码：${error.message}`;
           throw error;
         }
-        await addLog('步骤 6：后台接口未直接返回验证码，已通过浏览器标签页兜底读取到验证码。', 'info');
+        await addLog(`步骤 6：后台接口未直接返回验证码，已通过浏览器标签页兜底读取到验证码：${code}。`, 'info');
         return {
           code,
           payload,
@@ -2255,6 +2673,7 @@ function FindProxyForURL(url, host) {
           success: true,
         });
       }
+      await addLog(`步骤 6：验证码接口直接返回有效验证码：${code}。`, 'info');
       return code;
     }
 
@@ -2520,16 +2939,17 @@ function FindProxyForURL(url, host) {
       attempt = 1,
       maxAttempts = 1,
       waitSeconds = HOSTED_CHECKOUT_SUBSEQUENT_RESEND_WAIT_DEFAULT_SECONDS,
-      excludedCodes = []
+      excludedCodes = [],
+      reason = 'PayPal 提示验证码错误'
     ) {
       const runtimeConfig = await getHostedCheckoutRuntimeConfig({
         ensureCurrentSmsEntry: true,
       });
-      await clickHostedCheckoutVerificationResend(tabId, attempt, maxAttempts, 'PayPal 提示验证码错误', {
+      await clickHostedCheckoutVerificationResend(tabId, attempt, maxAttempts, reason, {
         preClickDelayMs: HOSTED_CHECKOUT_VERIFICATION_INVALID_RESEND_DELAY_MS,
       });
       const verificationCode = await waitForHostedCheckoutVerificationCodeWindow(waitSeconds, {
-        label: 'PayPal 验证码错误后重发验证码',
+        label: `${String(reason || 'PayPal 验证码错误').trim()}后重发验证码`,
         pollAttempts: runtimeConfig?.verificationPollAttempts,
         pollIntervalSeconds: runtimeConfig?.verificationPollIntervalSeconds,
         excludedCodes,
@@ -2542,6 +2962,7 @@ function FindProxyForURL(url, host) {
         ...guestProfile,
         verificationCode,
       });
+      await addLog(`步骤 6：已向 PayPal 授权页发送重发验证码填充指令：${String(verificationCode || '').trim()}。`, 'info');
       return {
         verificationCode,
       };
@@ -2947,7 +3368,9 @@ function FindProxyForURL(url, host) {
           }
           hostedOpenAiCardDeclinedRetries += 1;
           verificationSubmitted = false;
-          const retryAddress = await fetchHostedCheckoutAddress();
+          const retryAddress = await fetchHostedCheckoutAddress({
+            countryCode: guestProfile?.address?.countryCode,
+          });
           guestProfile = {
             ...guestProfile,
             address: retryAddress,
@@ -2977,7 +3400,9 @@ function FindProxyForURL(url, host) {
           }
           hostedOpenAiAddressRetries += 1;
           verificationSubmitted = false;
-          const retryAddress = await fetchHostedCheckoutAddress();
+          const retryAddress = await fetchHostedCheckoutAddress({
+            countryCode: guestProfile?.address?.countryCode,
+          });
           guestProfile = {
             ...guestProfile,
             address: retryAddress,
@@ -3281,7 +3706,9 @@ function FindProxyForURL(url, host) {
           const runtimeConfig = await getHostedCheckoutRuntimeConfig({
             ensureCurrentSmsEntry: true,
           });
-          const retryAddress = await fetchHostedCheckoutAddress();
+          const retryAddress = await fetchHostedCheckoutAddress({
+            countryCode: guestProfile?.address?.countryCode,
+          });
           guestProfile = buildHostedCheckoutGuestProfile(retryAddress, {
             ...runtimeConfig,
             phone: String(runtimeConfig?.phone || guestProfile.phone || '').trim(),
@@ -3306,7 +3733,7 @@ function FindProxyForURL(url, host) {
         if (
           pageState.hostedStage === 'verification'
           && pageState.verificationInputsVisible
-          && pageState.hostedVerificationInvalidCode
+          && (pageState.hostedVerificationInvalidCode || pageState.hostedVerificationBlankError)
         ) {
           if (
             hostedVerificationSubmitted
@@ -3331,6 +3758,12 @@ function FindProxyForURL(url, host) {
             await addLog(error.message.replace(HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT_PREFIX, ''), 'error');
             throw error;
           }
+          const resendReason = pageState.hostedVerificationInvalidCode
+            ? 'PayPal 提示验证码错误'
+            : 'PayPal 验证码提交后页面出现空错误态';
+          if (pageState.hostedVerificationBlankError) {
+            await addLog('步骤 6：PayPal 验证码页出现空错误提示，虽然没有返回具体文案，也按失败处理并触发 Resend。', 'warn');
+          }
           hostedVerificationResendAttempts += 1;
           const refillResult = await resendHostedCheckoutVerificationCodeAndRefill(
             tabId,
@@ -3338,7 +3771,8 @@ function FindProxyForURL(url, host) {
             hostedVerificationResendAttempts,
             maxResendAttempts,
             subsequentWaitSeconds,
-            Array.from(hostedVerificationAttemptedCodes)
+            Array.from(hostedVerificationAttemptedCodes),
+            resendReason
           );
           if (refillResult?.verificationCode) {
             hostedVerificationAttemptedCodes.add(String(refillResult.verificationCode));
@@ -3372,6 +3806,7 @@ function FindProxyForURL(url, host) {
             ...guestProfile,
             verificationCode: verificationResult.code,
           });
+          await addLog(`步骤 6：已向 PayPal 授权页发送验证码填充指令：${String(verificationResult.code || '').trim()}。`, 'info');
           hostedVerificationAttemptedCodes.add(String(verificationResult.code));
           hostedVerificationSubmitted = true;
           hostedVerificationLastSubmittedAt = Date.now();
@@ -3481,7 +3916,9 @@ function FindProxyForURL(url, host) {
       const runtimeConfig = await getHostedCheckoutRuntimeConfig({
         ensureCurrentSmsEntry: true,
       });
-      const address = await fetchHostedCheckoutAddress();
+      const address = await fetchHostedCheckoutAddress({
+        countryCode: getHostedCheckoutAddressCountryCodeForMode(runtimeConfig?.plusCheckoutMode),
+      });
       await addLog(`步骤 6：hosted checkout 配置快照：${JSON.stringify(runtimeConfig?.diagnostics || {})}`, 'info');
       await addLog(`步骤 6：hosted checkout 初始电话配置为 ${runtimeConfig.phone || '(空)'}。`, 'info');
       await addLog(`步骤 6：hosted checkout 地址数据：${JSON.stringify(address)}`, 'info');
@@ -4271,6 +4708,10 @@ function FindProxyForURL(url, host) {
     async function executePlusCheckoutCreate(state = {}) {
       activeVisibleStep = getCheckoutCreateDisplayStep(state);
       const paymentMethod = normalizePlusPaymentMethod(state?.plusPaymentMethod);
+      if (paymentMethod === PLUS_PAYMENT_METHOD_PAYPAL) {
+        const checkoutProfileState = resolveActivePlusCheckoutProfile(state, state);
+        await addLog(`步骤 6：当前 PayPal hosted checkout 模式为 ${checkoutProfileState.modeLabel}。`, 'info');
+      }
       await maybeClearPayPalSessionCookiesBeforeCheckoutCreate(state, paymentMethod);
       if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
         await executeGpcCheckoutCreate(state);
@@ -4299,14 +4740,18 @@ function FindProxyForURL(url, host) {
         PAYPAL_GENERIC_ERROR_RECOVERY_MAX_ATTEMPTS,
         assessHostedHermesRecoveryState,
         buildHostedHermesObservationSignature,
+        fetchHostedCheckoutAddress,
         generateCloudCheckoutFromApiWithRetry,
+        getHostedCheckoutAddressCountryCodeForMode,
         getPayPalApprovalBranchRecoveryCount,
         getPayPalGenericErrorRecoveryCount,
         isHostedCheckoutPendingUnexpectedChatGptReturnUrl,
         isHostedCheckoutPendingReturnUrl,
         isCloudCheckoutRetryableError,
+        getHostedCheckoutRuntimeConfig,
         readCloudCheckoutAccessTokenWithRetry,
         refreshOAuthTimeoutWindowAfterHostedCheckoutSuccess,
+        resolveActivePlusCheckoutProfile,
         shouldAutoRecoverPayPalApprovalBranch,
         shouldAutoRecoverPayPalGenericError,
         shouldClearPayPalSessionCookie,

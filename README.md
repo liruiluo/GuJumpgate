@@ -5,9 +5,9 @@
 如果这个项目能帮上你，欢迎点个 Star⭐~
 
 > [!IMPORTANT]
-> 目前 PAYPAY 无卡仅剩日区PP可通
+> 目前 PAYPAY 无卡 日区PP可完整跑通。
+> 美区已死，待复活 ;w;
 >
-> GOPAY半自动可实现，后面大概会推的，
 
 ## 已实现能力
 
@@ -35,9 +35,12 @@
 
 ## 前提要求
 
-1. 1 个带 API、且能连续正常接收 PayPal 验证码的 JP `+81` 接码手机号
-2. 1 个或 N 个支持 `IMAP` 和 `Graph` 的 Outlook 邮箱，或者自建 Cloudflare Temp Email / Cloud Mail
-3. 1 个相对干净、支持 PayPal 注册的 US 代理
+1. 1 个带 API、且能连续正常接收 PayPal 验证码的 JP +81 接码手机号
+2. 1 个或 N 个支持 `IMAP` 和 `Graph` 的 Outlook 邮箱 或者 自建 Cloudflare Temp Email edu 前缀，如 @edu.openai.comedu.openai.com 这样才有试用资格
+   （推荐使用outlook，实测存活率高于自建域名邮箱，也可能是我杂米的原因）
+3. 1 个相对干净、支持 PayPal 注册的 JP 代理 (干净就不会跳 PAYPAL 的注册滑块，账单页面的 Captcha 扩展已经设置了自动屏蔽)
+4. 1 个充值好的SMS平台，开通 APIKEY 用于Oauth接码
+   （具体选择SMS平台的选择，你可以参考我的对比站：https://sms.fur.li/  ）
 
 > [!NOTE]
 > 自建 Cloudflare Temp Email / Cloud Mail 需要使用 `edu` 前缀，例如 `edu.openai.com`，才有试用资格。
@@ -83,7 +86,7 @@
 
 - 成功率：连续 10 次串行运行，注册并激活 Plus 100% 成功率
 - 浏览器：Chrome `148.0.7778.168`（64 位正式版），开启无痕模式
-- 网络环境： US 自建代理 + 云端转换（公益）
+- 网络环境： JP 自建代理
 
 过程中遇到任何卡死的问题，都可以先停止，然后点击流程的各个节点进行重试，也可以点击旁边选择跳过。
 
@@ -95,36 +98,40 @@
 
 打开 `chrome://extensions/`，开启开发者模式。
 
-![打开 Chrome 扩展开发者模式](docs/images/github-readme-1779190547983.webp)
+![打开 Chrome 扩展开发者模式](docs/images/github-readme-1779190547983.png)
 
 ### 2. 加载扩展目录
 
 选择“加载已解压的扩展程序”，然后选择刚才解压出的文件夹。
 
-![加载未打包的扩展程序](docs/images/readme-load-extension.webp)
+![加载未打包的扩展程序](docs/images/readme-load-extension.png)
 
 ### 3. 启用无痕权限
 
 在扩展详情页中勾选“在无痕模式下启用”。
 
-![启用扩展的无痕模式权限](docs/images/readme-incognito-permission.webp)
+![启用扩展的无痕模式权限](docs/images/readme-incognito-permission.png)
 
 ### 4. 配置代理
 
-现在推荐且能走的路径是 **US注册** + **JP拿长链接** + **US付款**
+现在推荐且能走的路径是 **全程JP代理**
 这条路径还是可以稳定出试用和正常激活PLUS的
 
-#### 方案一：使用云端转换 （推荐 - 公益）
+#### 方案一：直接使用 (关闭云端转换) -推荐
 
-直接开启代理工具的规则/全局 US代理，选择云端转换，即可开始使用
+直接开启代理工具的规则/全局 JP代理，即可开始使用
 
-#### 方案二：本地配置代理
+#### 方案而：使用云端转换 (公益)
+
+直接开启代理工具的规则/全局 JP代理，选择云端转换，即可开始使用
+
+#### 方案三：本地配置代理
 
 配置本地用于支付转换的代理，出口必须是 JP 代理。
 
-![配置支付转换代理](docs/images/readme-payment-proxy.webp)
+![配置支付转换代理](docs/images/readme-payment-proxy.png)
 
-然后代理工具开启全局 US，或者配置好相应规则分流至 US。
+然后代理工具开启全局 JP，或者配置好相应规则分流至 JP。
 
 ### 5. 启动 Hotmail Helper
 
@@ -135,7 +142,7 @@
 - Windows：`start-hotmail-helper.bat`
 - macOS：`start-hotmail-helper.command`
 
-![运行 start-hotmail-helper 脚本](docs/images/github-readme-1779193024860.webp)
+![运行 start-hotmail-helper 脚本](docs/images/github-readme-1779193024860.png)
 
 ### 6. 配置扩展参数
 
@@ -143,45 +150,55 @@
 
 #### 选择最终 JSON 导出到的平台
 
-账号接入策略建议选择：`导出至 - SESSION JSON 导入`。
+账号接入策略建议选择：`手机号注册/绑定 Oauth`。
 
-![选择最终 JSON 导出平台](docs/images/readme-export-target.webp)
+![选择最终 JSON 导出平台](docs/images/README-1780155605371.png)
 
 > [!WARNING]
-> OAuth 目前严重风控，要求绑定手机号，仅推荐使用 `导出至 - SESSION JSON 导入`。
+> OAuth 目前严重风控，要求绑定手机号，仅推荐使用 `手机号注册/绑定 Oauth`。
 
-#### JSON 类型说明
+#### 模式选择
 
-- `OAuth`：导出的 JSON 有刷新令牌，反代工具能持续使用
-- `SESSION`：导出的 JSON 无刷新令牌，仅支持部分反代工具使用，例如 CPA / SUB2API；导出有效期大约 10 天，过期后需要重新获取
+请保持默认或手动选择日区PP Plus Checkout
 
-![选择账号接入策略](docs/images/readme-account-access-strategy.webp)
+![选择账号接入策略](docs/images/README-1780156040069.png)
 
 #### 验证码接口
 
 填写可直接 `GET` 请求的 `http` / `https` 地址。
 
-![填写验证码接口](docs/images/readme-verification-url.webp)
+![填写验证码接口](docs/images/readme-verification-url.png)
 
 #### PAYPAL 接码电话
 
 填写 PayPal 接码电话，注意按扩展提示填写格式。
 
-![填写 PAYPAL 接码电话](docs/images/readme-paypal-phone.webp)
+![填写 PAYPAL 接码电话](docs/images/readme-paypal-phone.png)
 
 #### 邮箱渠道
 
 选择对应的邮箱渠道。自建邮箱需使用 `edu` 前缀获得试用资格。
 
-![选择邮箱渠道](docs/images/readme-mail-provider.webp)
+![选择邮箱渠道](docs/images/readme-mail-provider.png)
 
 然后填写或导入各自邮箱渠道所需的配置。
+
+#### 接码设置
+
+![导入邮箱渠道配置](docs/images/README-1780155776707.png)
+
+- 选择接码服务商
+- 配置服务商顺序
+- 配置国家优先级
+- 配置接码 API
+- 配置价格上限
+- 其他默认即可
 
 ### 7. 开始运行
 
 保存配置后即可开始运行。
 
-![开始运行扩展流程](docs/images/github-readme-1779194981001.webp)
+![开始运行扩展流程](docs/images/github-readme-1779194981001.png)
 
 ## 版权与来源说明
 

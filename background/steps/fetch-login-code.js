@@ -11,6 +11,8 @@
       CLOUD_MAIL_PROVIDER = 'cloudmail',
       FREEMAIL_PROVIDER = 'freemail',
       ICLOUD_API_PROVIDER = 'icloud-api',
+      MOEMAIL_PROVIDER = 'moemail',
+      YYDSMAIL_PROVIDER = 'yydsmail',
       OUTLOOK_EMAIL_PLUS_PROVIDER = 'outlook-email-plus',
       completeNodeFromBackground,
       confirmCustomVerificationStepBypass,
@@ -616,6 +618,8 @@
         || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER
         || mail.provider === CLOUD_MAIL_PROVIDER
         || mail.provider === FREEMAIL_PROVIDER
+        || mail.provider === MOEMAIL_PROVIDER
+        || mail.provider === YYDSMAIL_PROVIDER
         || mail.provider === OUTLOOK_EMAIL_PLUS_PROVIDER
       ) {
         await addLog(`步骤 ${visibleStep}：正在通过 ${mail.label} 轮询验证码...`);

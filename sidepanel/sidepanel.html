@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GuJumpgate  V0.1.7</title>
+  <title>GuJumpgate  V0.1.9</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -25,7 +25,7 @@
       <div class="header-version-block">
         <div class="header-version-main">
           <button id="extension-update-status" class="header-version-title header-version-link" type="button"
-          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate  V0.1.7</button>
+          aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">GuJumpgate  V0.1.9</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -613,6 +613,8 @@
             <option value="cloudflare-temp-email">Cloudflare Temp Email</option>
             <option value="cloudmail">Cloud Mail</option>
             <option value="freemail">freemail</option>
+            <option value="moemail">MoeMail</option>
+            <option value="yydsmail">YYDS Mail</option>
             <option value="outlook-email-plus">Outlook Email Plus</option>
           </select>
           <button id="btn-mail-login" class="btn btn-outline btn-sm data-inline-btn" type="button" disabled>登录</button>
@@ -641,6 +643,8 @@
           <option value="cloudflare-temp-email">Cloudflare Temp Email</option>
           <option value="cloudmail">Cloud Mail</option>
           <option value="freemail">freemail</option>
+          <option value="moemail">MoeMail</option>
+          <option value="yydsmail">YYDS Mail</option>
           <option value="outlook-email-plus">Outlook Email Plus</option>
         </select>
       </div>
@@ -791,6 +795,26 @@
             <label class="toggle-switch" for="input-auto-run-retry-paypal-callback"
               title="开启后，PayPal Checkout 回调异常时会换新邮箱重走流程">
               <input type="checkbox" id="input-auto-run-retry-paypal-callback" />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+          <div class="setting-group auto-run-retry-short-link-error-setting">
+            <span class="setting-caption">短链报错自动重开</span>
+            <label class="toggle-switch" for="input-auto-run-retry-short-link-error"
+              title="开启后，步骤 6 短链 Checkout 出现红色错误框时会直接放弃当前账号并开新流程">
+              <input type="checkbox" id="input-auto-run-retry-short-link-error" checked />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+          <div class="setting-group auto-run-retry-card-declined-setting">
+            <span class="setting-caption">拒卡重试</span>
+            <label class="toggle-switch" for="input-hosted-checkout-card-declined-retry-enabled"
+              title="开启后，hosted checkout 检测到银行卡被拒绝时会自动更换地址并重试；关闭后遇到拒卡会立即停止当前流程">
+              <input type="checkbox" id="input-hosted-checkout-card-declined-retry-enabled" />
               <span class="toggle-switch-track" aria-hidden="true">
                 <span class="toggle-switch-thumb"></span>
               </span>
@@ -992,6 +1016,66 @@
         <span class="data-label">主域名</span>
         <input type="text" id="input-freemail-domain" class="data-input"
           placeholder="可留空，生成时自动取 freemail 返回的第一个域名" />
+      </div>
+    </div>
+    <div id="moemail-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">MoeMail</span>
+          <span class="data-value">通过 MoeMail OpenAPI 生成邮箱并自动轮询验证码</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-moemail-docs" class="btn btn-ghost btn-xs" type="button">文档</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-moemail-base-url" style="display:none;">
+        <span class="data-label">API 地址</span>
+        <input type="text" id="input-moemail-base-url" class="data-input" placeholder="https://your-moemail-domain" />
+      </div>
+      <div class="data-row" id="row-moemail-api-key" style="display:none;">
+        <span class="data-label">API Key</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-moemail-api-key" class="data-input data-input-with-icon"
+            placeholder="MoeMail OpenAPI Key" />
+          <button id="btn-toggle-moemail-api-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-moemail-api-key" data-show-label="显示 API Key"
+            data-hide-label="隐藏 API Key" aria-label="显示 API Key" title="显示 API Key"></button>
+        </div>
+      </div>
+      <div class="data-row" id="row-moemail-domain" style="display:none;">
+        <span class="data-label">主域名</span>
+        <input type="text" id="input-moemail-domain" class="data-input"
+          placeholder="可留空，生成时自动取 MoeMail 返回的第一个域名" />
+      </div>
+    </div>
+    <div id="yydsmail-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">YYDS Mail</span>
+          <span class="data-value">通过 YYDS Mail API 创建固定域名邮箱并自动轮询验证码</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-yydsmail-docs" class="btn btn-ghost btn-xs" type="button">文档</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-yydsmail-base-url" style="display:none;">
+        <span class="data-label">API 地址</span>
+        <input type="text" id="input-yydsmail-base-url" class="data-input" placeholder="https://vip.215.im" />
+      </div>
+      <div class="data-row" id="row-yydsmail-api-key" style="display:none;">
+        <span class="data-label">API Key</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-yydsmail-api-key" class="data-input data-input-with-icon"
+            placeholder="YYDS Mail API Key" />
+          <button id="btn-toggle-yydsmail-api-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-yydsmail-api-key" data-show-label="显示 API Key"
+            data-hide-label="隐藏 API Key" aria-label="显示 API Key" title="显示 API Key"></button>
+        </div>
+      </div>
+      <div class="data-row" id="row-yydsmail-domain" style="display:none;">
+        <span class="data-label">主域名</span>
+        <input type="text" id="input-yydsmail-domain" class="data-input"
+          placeholder="可留空，生成时使用 API Key 默认域名或自动域名选择" />
       </div>
     </div>
     <div id="outlook-email-plus-section" class="data-card hotmail-card" style="display:none;">

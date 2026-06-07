@@ -30,6 +30,10 @@
   const HOSTED_CHECKOUT_SUCCESS_WAIT_TIMEOUT_MS = 180000;
   const HOSTED_CHECKOUT_PENDING_RETURN_SESSION_SETTLE_MS = 8000;
   const HOSTED_CHECKOUT_PAYPAL_LOOP_TIMEOUT_MS = 3 * 60 * 1000;
+  const HOSTED_CHECKOUT_CUSTOM_FRAME_READY_DELAY_MS = 500;
+  const HOSTED_CHECKOUT_CUSTOM_FRAME_WAIT_TIMEOUT_MS = 30000;
+  const HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS = 3;
+  const HOSTED_CHECKOUT_CUSTOM_PAYPAL_REDIRECT_TIMEOUT_MS = 20000;
   const HOSTED_CHECKOUT_OPENAI_ADDRESS_RETRY_MAX_ATTEMPTS = 3;
   const HOSTED_CHECKOUT_CARD_ERROR_RETRY_MAX_ATTEMPTS = 3;
   const HOSTED_CHECKOUT_VERIFICATION_POLL_ATTEMPTS_DEFAULT = 6;
@@ -73,6 +77,7 @@
   const HOSTED_CHECKOUT_CARD_FALLBACK_ERROR_PREFIX = 'HOSTED_CHECKOUT_CARD_FALLBACK::';
   const HOSTED_CHECKOUT_CARD_DECLINED_ERROR_PREFIX = 'HOSTED_CHECKOUT_CARD_DECLINED::';
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT_PREFIX = 'HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::';
+  const PLUS_CHECKOUT_START_NEW_FLOW_ERROR_PREFIX = 'PLUS_CHECKOUT_START_NEW_FLOW::';
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_MAX_ATTEMPTS_DEFAULT = 1;
   const HOSTED_CHECKOUT_VERIFICATION_RESEND_MAX_ATTEMPTS_LIMIT = 10;
   const PLUS_CHECKOUT_PROFILE_SETTING_KEYS = Object.freeze([
@@ -80,6 +85,14 @@
     'hostedCheckoutPhoneNumber',
     'hostedCheckoutSmsPoolText',
     'hostedCheckoutSmsPoolUsage',
+    'hostedCheckoutCardDeclinedRetryEnabled',
+    'hostedCheckoutSmsPoolAutoDisableEnabled',
+    'hostedCheckoutFirstDirectResendEnabled',
+    'hostedCheckoutFirstResendWaitSeconds',
+    'hostedCheckoutSubsequentResendWaitSeconds',
+    'hostedCheckoutVerificationResendMaxAttempts',
+    'hostedCheckoutVerificationPollAttempts',
+    'hostedCheckoutVerificationPollIntervalSeconds',
   ]);
   const CHECKOUT_CONVERSION_PROXY_SETTINGS_SCOPE = 'regular';
   const CHECKOUT_CONVERSION_PROXY_BYPASS_LIST = ['<local>', 'localhost', '127.0.0.1'];
@@ -190,6 +203,14 @@
         hostedCheckoutPhoneNumber: '',
         hostedCheckoutSmsPoolText: '',
         hostedCheckoutSmsPoolUsage: {},
+        hostedCheckoutCardDeclinedRetryEnabled: true,
+        hostedCheckoutSmsPoolAutoDisableEnabled: false,
+        hostedCheckoutFirstDirectResendEnabled: false,
+        hostedCheckoutFirstResendWaitSeconds: HOSTED_CHECKOUT_FIRST_RESEND_WAIT_DEFAULT_SECONDS,
+        hostedCheckoutSubsequentResendWaitSeconds: HOSTED_CHECKOUT_SUBSEQUENT_RESEND_WAIT_DEFAULT_SECONDS,
+        hostedCheckoutVerificationResendMaxAttempts: HOSTED_CHECKOUT_VERIFICATION_RESEND_MAX_ATTEMPTS_DEFAULT,
+        hostedCheckoutVerificationPollAttempts: HOSTED_CHECKOUT_VERIFICATION_POLL_ATTEMPTS_DEFAULT,
+        hostedCheckoutVerificationPollIntervalSeconds: HOSTED_CHECKOUT_VERIFICATION_POLL_INTERVAL_DEFAULT_SECONDS,
       };
     }
 
@@ -200,6 +221,26 @@
         hostedCheckoutPhoneNumber: String(source.hostedCheckoutPhoneNumber || '').trim(),
         hostedCheckoutSmsPoolText: normalizeHostedCheckoutPoolText(source.hostedCheckoutSmsPoolText || ''),
         hostedCheckoutSmsPoolUsage: normalizeHostedCheckoutSmsPoolUsage(source.hostedCheckoutSmsPoolUsage || {}),
+        hostedCheckoutCardDeclinedRetryEnabled: source.hostedCheckoutCardDeclinedRetryEnabled !== false,
+        hostedCheckoutSmsPoolAutoDisableEnabled: Boolean(source.hostedCheckoutSmsPoolAutoDisableEnabled),
+        hostedCheckoutFirstDirectResendEnabled: Boolean(source.hostedCheckoutFirstDirectResendEnabled),
+        hostedCheckoutFirstResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+          source.hostedCheckoutFirstResendWaitSeconds,
+          HOSTED_CHECKOUT_FIRST_RESEND_WAIT_DEFAULT_SECONDS
+        ),
+        hostedCheckoutSubsequentResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+          source.hostedCheckoutSubsequentResendWaitSeconds,
+          HOSTED_CHECKOUT_SUBSEQUENT_RESEND_WAIT_DEFAULT_SECONDS
+        ),
+        hostedCheckoutVerificationResendMaxAttempts: normalizeHostedCheckoutVerificationResendMaxAttempts(
+          source.hostedCheckoutVerificationResendMaxAttempts
+        ),
+        hostedCheckoutVerificationPollAttempts: normalizeHostedCheckoutVerificationPollAttempts(
+          source.hostedCheckoutVerificationPollAttempts
+        ),
+        hostedCheckoutVerificationPollIntervalSeconds: normalizeHostedCheckoutVerificationPollIntervalSeconds(
+          source.hostedCheckoutVerificationPollIntervalSeconds
+        ),
       };
     }
 
@@ -222,6 +263,32 @@
         ),
         hostedCheckoutSmsPoolUsage: normalizeHostedCheckoutSmsPoolUsage(
           rawProfile.hostedCheckoutSmsPoolUsage ?? baseProfile.hostedCheckoutSmsPoolUsage ?? {}
+        ),
+        hostedCheckoutCardDeclinedRetryEnabled: (
+          rawProfile.hostedCheckoutCardDeclinedRetryEnabled ?? baseProfile.hostedCheckoutCardDeclinedRetryEnabled
+        ) !== false,
+        hostedCheckoutSmsPoolAutoDisableEnabled: Boolean(
+          rawProfile.hostedCheckoutSmsPoolAutoDisableEnabled ?? baseProfile.hostedCheckoutSmsPoolAutoDisableEnabled
+        ),
+        hostedCheckoutFirstDirectResendEnabled: Boolean(
+          rawProfile.hostedCheckoutFirstDirectResendEnabled ?? baseProfile.hostedCheckoutFirstDirectResendEnabled
+        ),
+        hostedCheckoutFirstResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+          rawProfile.hostedCheckoutFirstResendWaitSeconds ?? baseProfile.hostedCheckoutFirstResendWaitSeconds,
+          HOSTED_CHECKOUT_FIRST_RESEND_WAIT_DEFAULT_SECONDS
+        ),
+        hostedCheckoutSubsequentResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
+          rawProfile.hostedCheckoutSubsequentResendWaitSeconds ?? baseProfile.hostedCheckoutSubsequentResendWaitSeconds,
+          HOSTED_CHECKOUT_SUBSEQUENT_RESEND_WAIT_DEFAULT_SECONDS
+        ),
+        hostedCheckoutVerificationResendMaxAttempts: normalizeHostedCheckoutVerificationResendMaxAttempts(
+          rawProfile.hostedCheckoutVerificationResendMaxAttempts ?? baseProfile.hostedCheckoutVerificationResendMaxAttempts
+        ),
+        hostedCheckoutVerificationPollAttempts: normalizeHostedCheckoutVerificationPollAttempts(
+          rawProfile.hostedCheckoutVerificationPollAttempts ?? baseProfile.hostedCheckoutVerificationPollAttempts
+        ),
+        hostedCheckoutVerificationPollIntervalSeconds: normalizeHostedCheckoutVerificationPollIntervalSeconds(
+          rawProfile.hostedCheckoutVerificationPollIntervalSeconds ?? baseProfile.hostedCheckoutVerificationPollIntervalSeconds
         ),
       };
     }
@@ -357,6 +424,315 @@
 
     function isPayPalHermesUrl(url = '') {
       return /paypal\.com\/webapps\/hermes/i.test(String(url || ''));
+    }
+
+    function isCustomChatGptCheckoutUrl(url = '') {
+      return /^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com)\/checkout(?:[/?#]|$)/i.test(String(url || '').trim());
+    }
+
+    function normalizeText(value = '') {
+      return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    async function getCheckoutFrames(tabId) {
+      if (!chrome?.webNavigation?.getAllFrames) {
+        return [{ frameId: 0, url: '' }];
+      }
+      const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+      if (!Array.isArray(frames) || !frames.length) {
+        return [{ frameId: 0, url: '' }];
+      }
+      return frames
+        .filter((frame) => Number.isInteger(frame?.frameId))
+        .sort((left, right) => Number(left.frameId) - Number(right.frameId));
+    }
+
+    async function pingCheckoutFrame(tabId, frameId) {
+      try {
+        const pong = await chrome.tabs.sendMessage(tabId, {
+          type: 'PING',
+          source: 'background',
+          payload: {},
+        }, {
+          frameId: Number.isInteger(frameId) ? frameId : 0,
+        });
+        return Boolean(pong?.ok && (!pong.source || pong.source === PLUS_CHECKOUT_SOURCE));
+      } catch {
+        return false;
+      }
+    }
+
+    async function ensurePlusCheckoutFrameReady(tabId, frameId) {
+      if (await pingCheckoutFrame(tabId, frameId)) {
+        return true;
+      }
+      if (!chrome?.scripting?.executeScript) {
+        return false;
+      }
+
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: (injectedSource) => {
+            window.__MULTIPAGE_SOURCE = injectedSource;
+          },
+          args: [PLUS_CHECKOUT_SOURCE],
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          files: PLUS_CHECKOUT_INJECT_FILES,
+        });
+      } catch {
+        // Ignore mid-navigation/frame-race errors and re-ping below.
+      }
+
+      await sleepWithStop(HOSTED_CHECKOUT_CUSTOM_FRAME_READY_DELAY_MS);
+      return await pingCheckoutFrame(tabId, frameId);
+    }
+
+    async function ensurePlusCheckoutFramesReady(tabId, frames) {
+      const checkedFrames = [];
+      for (const frame of frames) {
+        const ready = await ensurePlusCheckoutFrameReady(tabId, frame.frameId);
+        checkedFrames.push({ ...frame, ready });
+      }
+      return checkedFrames;
+    }
+
+    async function sendFrameMessage(tabId, frameId, message) {
+      return chrome.tabs.sendMessage(tabId, message, {
+        frameId: Number.isInteger(frameId) ? frameId : 0,
+      });
+    }
+
+    function isPaymentFrameUrl(url = '') {
+      return /elements-inner-payment|componentName=payment/i.test(String(url || ''));
+    }
+
+    function isAddressFrameUrl(url = '') {
+      return /elements-inner-address|componentName=address/i.test(String(url || ''));
+    }
+
+    async function inspectCheckoutFrame(tabId, frame) {
+      try {
+        const result = await sendFrameMessage(tabId, frame.frameId, {
+          type: 'PLUS_CHECKOUT_GET_STATE',
+          source: 'background',
+          payload: {},
+        });
+        if (result?.error) {
+          return { frame, error: result.error };
+        }
+        return { frame: { ...frame, ready: true }, result: result || {} };
+      } catch (error) {
+        const readyError = frame.ready === false ? 'content-script-not-ready' : '';
+        const message = error?.message || String(error || '');
+        return { frame, error: readyError ? `${readyError}: ${message}` : message };
+      }
+    }
+
+    async function inspectCheckoutFrames(tabId, frames) {
+      const inspections = [];
+      for (const frame of frames) {
+        inspections.push(await inspectCheckoutFrame(tabId, frame));
+      }
+      return inspections;
+    }
+
+    function buildFrameSummary(inspections = []) {
+      return inspections
+        .map((item) => {
+          const flags = [];
+          if (item.result?.hasPayPal) flags.push('paypal');
+          if (item.result?.billingFieldsVisible) flags.push('billing');
+          if (item.result?.hasSubscribeButton) flags.push('subscribe');
+          if (item.result?.checkoutAmountSummary?.hasTodayDue) flags.push('amount');
+          if (item.result?.customCheckoutError) flags.push('custom-error');
+          if (!flags.length && item.error) flags.push(item.error);
+          if (!flags.length) flags.push('no-match');
+          return `${item.frame.frameId}:${item.frame.url || 'about:blank'}:${flags.join(',')}`;
+        })
+        .slice(0, 8)
+        .join(' | ');
+    }
+
+    function findCustomCheckoutErrorInspection(inspections = []) {
+      return inspections.find((item) => item?.result?.customCheckoutError) || null;
+    }
+
+    async function assertNoCustomCheckoutError(tabId, candidateFrames = [], contextLabel = '') {
+      const frames = candidateFrames.length ? candidateFrames : await getCheckoutFrames(tabId);
+      const readyFrames = await ensurePlusCheckoutFramesReady(tabId, frames);
+      const inspections = await inspectCheckoutFrames(tabId, readyFrames);
+      const errorInspection = findCustomCheckoutErrorInspection(inspections);
+      if (!errorInspection) {
+        return inspections;
+      }
+      const message = String(errorInspection?.result?.customCheckoutErrorMessage || '').trim() || '页面出现错误提示框。';
+      const frameLabel = Number(errorInspection?.frame?.frameId) === 0
+        ? '主页面'
+        : `iframe(${Number(errorInspection?.frame?.frameId) || 0})`;
+      throw new Error(`${PLUS_CHECKOUT_START_NEW_FLOW_ERROR_PREFIX}步骤 6：${contextLabel ? `${contextLabel}：` : ''}custom checkout 检测到错误提示框（${frameLabel}）：${message}`);
+    }
+
+    function isRetryableCustomCheckoutEmailError(error) {
+      const message = String(error?.message || error || '').trim();
+      return /PLUS_CHECKOUT_START_NEW_FLOW::[\s\S]*(出错了，请重试|请重试|try\s+again|something\s+went\s+wrong)/i.test(message);
+    }
+
+    async function tryRecoverCustomCheckoutByRefillingEmail(tabId, registrationEmail = '', candidateFrames = [], paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      const normalizedEmail = String(registrationEmail || '').trim();
+      if (!normalizedEmail) {
+        return false;
+      }
+      await addLog('步骤 6：检测到提交后的短链错误提示，准备清空并重填顶层联系邮箱后重试订阅。', 'warn');
+      const refillResult = await sendFrameMessage(tabId, 0, {
+        type: 'PLUS_CHECKOUT_FILL_CONTACT_EMAIL',
+        source: 'background',
+        payload: {
+          email: normalizedEmail,
+          options: {
+            overwrite: true,
+            clearFirst: true,
+            forceRefill: true,
+            settleTimeoutMs: 4000,
+          },
+        },
+      }).catch(() => null);
+      if (refillResult?.error) {
+        throw new Error(refillResult.error);
+      }
+      if (refillResult?.emailFillResult) {
+        await addLog(`步骤 6：短链错误恢复后的顶层联系邮箱处理结果：${JSON.stringify({
+          contactEmail: refillResult?.contactEmail || normalizedEmail,
+          found: Boolean(refillResult.emailFillResult.found),
+          filled: Boolean(refillResult.emailFillResult.filled),
+          alreadyFilled: Boolean(refillResult.emailFillResult.alreadyFilled),
+          skipped: Boolean(refillResult.emailFillResult.skipped),
+          reason: String(refillResult.emailFillResult.reason || ''),
+          value: String(refillResult.emailFillResult.value || ''),
+        })}`, 'info');
+      }
+      await sleepWithStop(500);
+      const subscribeFrame = await waitForSubscribeFrame(tabId, candidateFrames);
+      const subscribeResult = await sendFrameMessage(tabId, subscribeFrame.frameId, {
+        type: 'PLUS_CHECKOUT_CLICK_SUBSCRIBE',
+        source: 'background',
+        payload: {
+          beforeClickDelayMs: 900,
+          paymentMethod,
+          autoCheckAgreement: true,
+        },
+      });
+      if (subscribeResult?.error) {
+        throw new Error(subscribeResult.error);
+      }
+      return true;
+    }
+
+    function pickPaymentFrame(inspections = []) {
+      return inspections.find((item) => item.result?.hasPayPal || item.result?.paypalCandidates?.length)
+        || inspections.find((item) => isPaymentFrameUrl(item.frame.url))
+        || null;
+    }
+
+    function pickBillingFrame(inspections = []) {
+      return inspections.find((item) => item.result?.billingFieldsVisible)
+        || inspections.find((item) => isAddressFrameUrl(item.frame.url))
+        || null;
+    }
+
+    function pickSubscribeFrame(inspections = []) {
+      return inspections.find((item) => item.result?.hasSubscribeButton)
+        || inspections.find((item) => item.frame.frameId === 0)
+        || null;
+    }
+
+    async function waitForFrameMatch(tabId, pickFrame, options = {}) {
+      const label = String(options.label || 'checkout frame').trim() || 'checkout frame';
+      const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || HOSTED_CHECKOUT_CUSTOM_FRAME_WAIT_TIMEOUT_MS));
+      const startedAt = Date.now();
+      let lastInspections = [];
+
+      while (true) {
+        const readyFrames = await ensurePlusCheckoutFramesReady(tabId, await getCheckoutFrames(tabId));
+        const inspections = await inspectCheckoutFrames(tabId, readyFrames);
+        lastInspections = inspections;
+        const picked = pickFrame(inspections);
+        if (picked) {
+          return {
+            picked,
+            inspections,
+          };
+        }
+        if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+          const frameSummary = buildFrameSummary(lastInspections) || 'none';
+          throw new Error(`步骤 6：等待${label}超时（${Math.round(timeoutMs / 1000)} 秒）。frame 摘要：${frameSummary}`);
+        }
+        await sleepWithStop(250);
+      }
+    }
+
+    async function waitForBillingFrame(tabId) {
+      const result = await waitForFrameMatch(tabId, pickBillingFrame, {
+        label: '账单地址 iframe',
+      });
+      return {
+        frameId: result.picked.frame.frameId,
+        frameUrl: result.picked.frame.url || '',
+        ready: result.picked.frame.ready !== false,
+        inspections: result.inspections,
+      };
+    }
+
+    async function waitForSubscribeFrame(tabId, candidateFrames = []) {
+      const frames = candidateFrames.length ? candidateFrames : [{ frameId: 0, url: '' }];
+      const startedAt = Date.now();
+      let lastInspections = [];
+      while (true) {
+        const readyFrames = await ensurePlusCheckoutFramesReady(tabId, frames);
+        const inspections = await inspectCheckoutFrames(tabId, readyFrames);
+        lastInspections = inspections;
+        const picked = pickSubscribeFrame(inspections);
+        if (picked) {
+          return picked.frame;
+        }
+        if (Date.now() - startedAt >= HOSTED_CHECKOUT_CUSTOM_FRAME_WAIT_TIMEOUT_MS) {
+          const frameSummary = buildFrameSummary(lastInspections) || 'none';
+          throw new Error(`步骤 6：等待订阅按钮 iframe 超时（${Math.round(HOSTED_CHECKOUT_CUSTOM_FRAME_WAIT_TIMEOUT_MS / 1000)} 秒）。frame 摘要：${frameSummary}`);
+        }
+        await sleepWithStop(250);
+      }
+    }
+
+    async function waitForCustomCheckoutPayPalRedirect(tabId) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < HOSTED_CHECKOUT_CUSTOM_PAYPAL_REDIRECT_TIMEOUT_MS) {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!tab) {
+          throw new Error('步骤 6：checkout 标签页已关闭，无法继续等待 PayPal 跳转。');
+        }
+        const topLevelState = await sendFrameMessage(tabId, 0, {
+          type: 'PLUS_CHECKOUT_GET_STATE',
+          source: 'background',
+          payload: {},
+        }).catch(() => null);
+        if (topLevelState?.customCheckoutError) {
+          throw new Error(`${PLUS_CHECKOUT_START_NEW_FLOW_ERROR_PREFIX}步骤 6：等待跳转 PayPal 时检测到错误提示框：${String(topLevelState.customCheckoutErrorMessage || '').trim() || '页面出现错误提示框。'}`);
+        }
+        const url = String(tab.url || '').trim();
+        if (isPayPalUrl(url) && !isCustomChatGptCheckoutUrl(url)) {
+          await waitForTabCompleteUntilStopped(tabId);
+          await sleepWithStop(1000);
+          return tab;
+        }
+        if (url && !isCustomChatGptCheckoutUrl(url) && !isPayPalUrl(url) && !isPaymentsSuccessUrl(url)) {
+          await addLog(`步骤 6：点击订阅后页面跳转到非 PayPal 识别地址：${url}`, 'warn');
+          return null;
+        }
+        await sleepWithStop(500);
+      }
+      return null;
     }
 
     async function completePlusCheckoutCreate(payload = {}) {
@@ -1635,6 +2011,9 @@ function FindProxyForURL(url, host) {
         selectedHostedSmsPoolPhone: String(selectedSmsEntry?.phone || '').trim(),
         selectedHostedSmsPoolVerificationUrl: String(selectedSmsEntry?.verificationUrl || '').trim(),
         hostedCheckoutSmsPoolAutoDisableEnabled: Boolean(stored?.hostedCheckoutSmsPoolAutoDisableEnabled ?? state?.hostedCheckoutSmsPoolAutoDisableEnabled),
+        hostedCheckoutCardDeclinedRetryEnabled: stored?.hostedCheckoutCardDeclinedRetryEnabled !== undefined
+          ? stored.hostedCheckoutCardDeclinedRetryEnabled !== false
+          : state?.hostedCheckoutCardDeclinedRetryEnabled !== false,
         hostedCheckoutFirstDirectResendEnabled: Boolean(stored?.hostedCheckoutFirstDirectResendEnabled ?? state?.hostedCheckoutFirstDirectResendEnabled),
         hostedCheckoutFirstResendWaitSeconds: normalizeHostedCheckoutResendWaitSeconds(
           stored?.hostedCheckoutFirstResendWaitSeconds ?? state?.hostedCheckoutFirstResendWaitSeconds,
@@ -1779,6 +2158,7 @@ function FindProxyForURL(url, host) {
           'hostedCheckoutPhoneNumber',
           'hostedCheckoutSmsPoolText',
           'hostedCheckoutSmsPoolUsage',
+          'hostedCheckoutCardDeclinedRetryEnabled',
           'hostedCheckoutSmsPoolAutoDisableEnabled',
           'hostedCheckoutFirstDirectResendEnabled',
           'hostedCheckoutFirstResendWaitSeconds',
@@ -1838,6 +2218,7 @@ function FindProxyForURL(url, host) {
       const hostedCheckoutSmsPoolAutoDisableEnabled = Boolean(
         activeProfile.hostedCheckoutSmsPoolAutoDisableEnabled
       );
+      const cardDeclinedRetryEnabled = activeProfile.hostedCheckoutCardDeclinedRetryEnabled !== false;
       const firstDirectResendEnabled = Boolean(
         activeProfile.hostedCheckoutFirstDirectResendEnabled
       );
@@ -1875,6 +2256,7 @@ function FindProxyForURL(url, host) {
         verificationUrl,
         phone,
         hostedCheckoutSmsPoolAutoDisableEnabled,
+        hostedCheckoutCardDeclinedRetryEnabled: cardDeclinedRetryEnabled,
         firstDirectResendEnabled,
         firstResendWaitSeconds,
         subsequentResendWaitSeconds,
@@ -2319,15 +2701,25 @@ function FindProxyForURL(url, host) {
     }
 
     function buildHostedCheckoutAddressSeed(address = {}) {
+      const countryCode = getHostedCheckoutAddressCountryCode(address?.countryCode || 'US');
+      const address1 = normalizeText(address?.street || address?.address1 || address?.line1 || '123 Main St');
+      const city = normalizeText(address?.city || 'New York');
+      const region = normalizeText(address?.state || address?.stateFull || address?.prefecture || 'New York');
+      const postalCode = normalizeText(address?.zip || address?.postalCode || '10001');
+      if (!address1 || !city || !postalCode) {
+        return null;
+      }
       return {
-        countryCode: 'US',
+        countryCode,
+        query: [address1, city].filter(Boolean).join(', '),
+        source: 'hosted-checkout',
         skipAutocomplete: true,
         autoCheckAgreement: true,
         fallback: {
-          address1: String(address.street || '123 Main St').trim(),
-          city: String(address.city || 'New York').trim(),
-          region: String(address.state || 'New York').trim(),
-          postalCode: String(address.zip || '10001').trim(),
+          address1,
+          city,
+          region,
+          postalCode,
         },
       };
     }
@@ -2735,6 +3127,10 @@ function FindProxyForURL(url, host) {
       const runtimeConfig = await getHostedCheckoutRuntimeConfig({
         ensureCurrentSmsEntry: true,
       });
+      const firstWaitSeconds = normalizeHostedCheckoutResendWaitSeconds(
+        runtimeConfig?.firstResendWaitSeconds,
+        HOSTED_CHECKOUT_FIRST_RESEND_WAIT_DEFAULT_SECONDS
+      );
       const pollAttempts = normalizeHostedCheckoutVerificationPollAttempts(
         runtimeConfig?.verificationPollAttempts
       );
@@ -2743,6 +3139,13 @@ function FindProxyForURL(url, host) {
       );
       const pollIntervalMs = pollIntervalSeconds * 1000;
       let lastError = null;
+      if (firstWaitSeconds > 0) {
+        await addLog(
+          `步骤 6：检测到 hosted checkout OpenAI 验证码弹窗，先按首次等码配置等待 ${firstWaitSeconds} 秒，再开始轮询验证码接口。`,
+          'info'
+        );
+        await sleepWithStop(firstWaitSeconds * 1000);
+      }
       for (let attempt = 1; attempt <= pollAttempts; attempt += 1) {
         throwIfStopped();
         try {
@@ -3291,12 +3694,245 @@ function FindProxyForURL(url, host) {
         || /(?:bank\s*)?card\s+(?:was\s+)?declined|try\s+another\s+card|payment\s+method\s+was\s+declined|银行卡被拒绝|请尝试另一张卡|请尝试另一张银行卡|您的银行卡被拒绝/i.test(message);
     }
 
-    async function runHostedCheckoutOpenAiFlow(tabId, guestProfile) {
+    async function runHostedCheckoutCustomChatGptFlow(tabId, guestProfile = {}) {
+      await addLog('步骤 6：检测到 ChatGPT custom checkout 页面，改用 iframe 账单流程进入 PayPal。', 'info');
+      const latestState = typeof getState === 'function'
+        ? await getState().catch(() => ({}))
+        : {};
+      const topLevelState = await sendTabMessageUntilStopped(tabId, PLUS_CHECKOUT_SOURCE, {
+        type: 'PLUS_CHECKOUT_GET_STATE',
+        source: 'background',
+        payload: {},
+      });
+      if (topLevelState?.error) {
+        throw new Error(topLevelState.error);
+      }
+      if (topLevelState?.customCheckoutError) {
+        throw new Error(`${PLUS_CHECKOUT_START_NEW_FLOW_ERROR_PREFIX}步骤 6：custom checkout 检测到错误提示框：${String(topLevelState.customCheckoutErrorMessage || '').trim() || '页面出现错误提示框。'}`);
+      }
+      const amountSummary = topLevelState?.checkoutAmountSummary || null;
+      if (amountSummary?.hasTodayDue && !amountSummary.isZero) {
+        const amountLabel = amountSummary.rawAmount || (
+          Number.isFinite(Number(amountSummary.amount)) ? String(amountSummary.amount) : '未知金额'
+        );
+        throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::步骤 6：检测到今日应付金额不是 0（${amountLabel}），当前账号没有免费试用资格，已自动停止整个流程。`);
+      }
+
+      const registrationEmail = String(
+        latestState?.email
+        || latestState?.registrationEmailState?.current
+        || guestProfile?.email
+        || ''
+      ).trim();
+      const addressSeed = buildHostedCheckoutAddressSeed(guestProfile?.address || {});
+      if (!addressSeed) {
+        throw new Error('步骤 6：custom checkout 缺少完整地址，无法自动填写 PayPal 账单信息。');
+      }
+
+      const paymentFrameMatch = await waitForFrameMatch(tabId, pickPaymentFrame, {
+        label: 'PayPal iframe',
+      });
+      const initialInspections = paymentFrameMatch.inspections || [];
+      const paymentFrame = paymentFrameMatch.picked;
+      if (!paymentFrame) {
+        const frameSummary = buildFrameSummary(initialInspections) || 'none';
+        throw new Error(`步骤 6：检测到 ChatGPT custom checkout 页面，但未在主页面或 iframe 中发现 PayPal DOM。frame 摘要：${frameSummary}`);
+      }
+      if (paymentFrame.frame.ready === false) {
+        throw new Error(`步骤 6：已定位到 PayPal 所在 iframe（frameId=${paymentFrame.frame.frameId}），但账单脚本无法注入该 iframe。`);
+      }
+
+      if (paymentFrame.frame.frameId !== 0) {
+        await addLog(`步骤 6：PayPal 位于 checkout iframe（frameId=${paymentFrame.frame.frameId}），将改为在该 frame 内操作。`, 'info');
+      }
+
+      const selectResult = await sendFrameMessage(tabId, paymentFrame.frame.frameId, {
+        type: 'PLUS_CHECKOUT_SELECT_PAYPAL',
+        source: 'background',
+        payload: { paymentMethod: PLUS_PAYMENT_METHOD_PAYPAL },
+      });
+      if (selectResult?.error) {
+        throw new Error(selectResult.error);
+      }
+
+      await sleepWithStop(1000);
+      let billingFrame = null;
+      try {
+        billingFrame = await waitForBillingFrame(tabId);
+      } catch (error) {
+        await addLog(`步骤 6：暂未识别到独立账单地址 iframe，先尝试直接在 PayPal frame 内填写：${error?.message || String(error || '未知错误')}`, 'warn');
+      }
+      const activeBillingFrame = billingFrame || {
+        frameId: paymentFrame.frame.frameId,
+        frameUrl: paymentFrame.frame.url || '',
+        ready: paymentFrame.frame.ready !== false,
+      };
+      if (!activeBillingFrame.ready) {
+        throw new Error(`步骤 6：已定位到账单信息所在 iframe（frameId=${activeBillingFrame.frameId}），但账单脚本无法注入该 iframe。`);
+      }
+      if (activeBillingFrame.frameId !== paymentFrame.frame.frameId) {
+        await addLog(`步骤 6：账单信息位于 checkout iframe（frameId=${activeBillingFrame.frameId}），将改为在该 frame 内填写。`, 'info');
+      }
+
+      const fillResult = await sendFrameMessage(tabId, activeBillingFrame.frameId, {
+        type: 'PLUS_CHECKOUT_FILL_BILLING_ADDRESS',
+        source: 'background',
+        payload: {
+          fullName: String(guestProfile?.fullName || '').trim(),
+          email: registrationEmail,
+          phone: String(guestProfile?.phone || '').trim(),
+          addressSeed,
+          skipContactEmailFill: true,
+          autoCheckAgreement: true,
+        },
+      });
+      if (fillResult?.error) {
+        throw new Error(fillResult.error);
+      }
+      await assertNoCustomCheckoutError(tabId, [
+        { frameId: 0, url: '' },
+        { frameId: paymentFrame.frame.frameId, url: paymentFrame.frame.url || '' },
+        { frameId: activeBillingFrame.frameId, url: activeBillingFrame.frameUrl || '' },
+      ], '填写账单信息后');
+      if (registrationEmail) {
+        const topLevelEmailResult = await sendFrameMessage(tabId, 0, {
+          type: 'PLUS_CHECKOUT_FILL_CONTACT_EMAIL',
+          source: 'background',
+          payload: {
+            email: registrationEmail,
+          },
+        }).catch(() => null);
+        if (topLevelEmailResult?.error) {
+          throw new Error(topLevelEmailResult.error);
+        }
+        if (topLevelEmailResult?.emailFillResult) {
+          await addLog(`步骤 6：custom checkout 顶层联系邮箱处理结果：${JSON.stringify({
+            contactEmail: topLevelEmailResult?.contactEmail || registrationEmail || '',
+            found: Boolean(topLevelEmailResult.emailFillResult.found),
+            filled: Boolean(topLevelEmailResult.emailFillResult.filled),
+            alreadyFilled: Boolean(topLevelEmailResult.emailFillResult.alreadyFilled),
+            skipped: Boolean(topLevelEmailResult.emailFillResult.skipped),
+            reason: String(topLevelEmailResult.emailFillResult.reason || ''),
+            value: String(topLevelEmailResult.emailFillResult.value || ''),
+          })}`, 'info');
+        }
+      }
+      if (fillResult?.emailFillResult && fillResult.emailFillResult.reason !== 'skipped_by_payload') {
+        await addLog(`步骤 6：custom checkout 联系邮箱处理结果：${JSON.stringify({
+          contactEmail: fillResult?.contactEmail || registrationEmail || '',
+          found: Boolean(fillResult.emailFillResult.found),
+          filled: Boolean(fillResult.emailFillResult.filled),
+          alreadyFilled: Boolean(fillResult.emailFillResult.alreadyFilled),
+          skipped: Boolean(fillResult.emailFillResult.skipped),
+          reason: String(fillResult.emailFillResult.reason || ''),
+          value: String(fillResult.emailFillResult.value || ''),
+        })}`, 'info');
+      }
+
+      let redirectedTab = null;
+      let lastSubmitError = '';
+      for (let attempt = 1; attempt <= HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS; attempt += 1) {
+        await addLog(
+          attempt === 1
+            ? '步骤 6：custom checkout 信息已填写完成，等待 3 秒让页面校验后再提交...'
+            : `步骤 6：准备第 ${attempt}/${HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS} 次重新点击订阅...`,
+          attempt === 1 ? 'info' : 'warn'
+        );
+        await sleepWithStop(3000);
+        const subscribeFrame = await waitForSubscribeFrame(tabId, [
+          { frameId: 0, url: '' },
+          { frameId: paymentFrame.frame.frameId, url: paymentFrame.frame.url || '' },
+          { frameId: activeBillingFrame.frameId, url: activeBillingFrame.frameUrl || '' },
+        ]);
+        const subscribeResult = await sendFrameMessage(tabId, subscribeFrame.frameId, {
+          type: 'PLUS_CHECKOUT_CLICK_SUBSCRIBE',
+          source: 'background',
+          payload: {
+            beforeClickDelayMs: attempt === 1 ? 700 : 1200,
+            paymentMethod: PLUS_PAYMENT_METHOD_PAYPAL,
+            autoCheckAgreement: true,
+          },
+        });
+        if (subscribeResult?.error) {
+          lastSubmitError = subscribeResult.error;
+          await addLog(`步骤 6：点击订阅失败（${attempt}/${HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS}）：${lastSubmitError}`, 'warn');
+          continue;
+        }
+        const recoveryFrames = [
+          { frameId: 0, url: '' },
+          { frameId: paymentFrame.frame.frameId, url: paymentFrame.frame.url || '' },
+          { frameId: activeBillingFrame.frameId, url: activeBillingFrame.frameUrl || '' },
+          { frameId: subscribeFrame.frameId, url: subscribeFrame.url || '' },
+        ];
+        let recoveredFromEmailError = false;
+        try {
+          await assertNoCustomCheckoutError(tabId, recoveryFrames, '点击订阅后');
+        } catch (error) {
+          if (isRetryableCustomCheckoutEmailError(error) && await tryRecoverCustomCheckoutByRefillingEmail(tabId, registrationEmail, recoveryFrames, PLUS_PAYMENT_METHOD_PAYPAL)) {
+            recoveredFromEmailError = true;
+          } else {
+            throw error;
+          }
+        }
+
+        await addLog(
+          recoveredFromEmailError
+            ? `步骤 6：邮箱已清空并重填，正在重新等待跳转到 PayPal（${attempt}/${HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS}）...`
+            : `步骤 6：已点击订阅，正在等待跳转到 PayPal（${attempt}/${HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS}）...`,
+          recoveredFromEmailError ? 'warn' : 'info'
+        );
+        try {
+          redirectedTab = await waitForCustomCheckoutPayPalRedirect(tabId);
+        } catch (error) {
+          if (isRetryableCustomCheckoutEmailError(error) && await tryRecoverCustomCheckoutByRefillingEmail(tabId, registrationEmail, recoveryFrames, PLUS_PAYMENT_METHOD_PAYPAL)) {
+            await addLog(`步骤 6：邮箱已清空并重填，正在再次等待跳转到 PayPal（${attempt}/${HOSTED_CHECKOUT_CUSTOM_SUBMIT_MAX_ATTEMPTS}）...`, 'warn');
+            redirectedTab = await waitForCustomCheckoutPayPalRedirect(tabId);
+          } else {
+            throw error;
+          }
+        }
+        if (redirectedTab) {
+          break;
+        }
+        lastSubmitError = `提交后 ${Math.round(HOSTED_CHECKOUT_CUSTOM_PAYPAL_REDIRECT_TIMEOUT_MS / 1000)} 秒内未跳转到 PayPal`;
+        await addLog(`步骤 6：${lastSubmitError}，将重试提交。`, 'warn');
+      }
+
+      if (!redirectedTab) {
+        throw new Error(`步骤 6：custom checkout 多次点击订阅后仍未跳转到 PayPal。${lastSubmitError}`);
+      }
+
+      return {
+        transitioned: true,
+        url: String(redirectedTab?.url || '').trim(),
+        guestProfile,
+      };
+    }
+
+    async function runHostedCheckoutOpenAiFlow(tabId, guestProfile, runtimeConfig = {}) {
+      await addLog('步骤 6：等待浏览器真正跳转到 Stripe 托管收银台页面...', 'info');
+      await waitForUrlMatch(
+        tabId,
+        (url) => {
+          const u = String(url || '').toLowerCase();
+          return u.includes('pay.openai.com')
+            || u.includes('checkout.stripe.com')
+            || (u.includes('chatgpt.com') && u.includes('/checkout/'));
+        },
+        15000,
+        500
+      );
+
       await ensureContentScriptReadyOnTabUntilStopped(PLUS_CHECKOUT_SOURCE, tabId, {
         inject: PLUS_CHECKOUT_INJECT_FILES,
         injectSource: PLUS_CHECKOUT_SOURCE,
         logMessage: '步骤 6：hosted checkout 页面仍在加载，等待脚本就绪...',
       });
+      const currentTab = await chrome?.tabs?.get?.(tabId).catch(() => null);
+      const currentUrl = String(currentTab?.url || '').trim();
+      if (isCustomChatGptCheckoutUrl(currentUrl)) {
+        return runHostedCheckoutCustomChatGptFlow(tabId, guestProfile);
+      }
       const registrationEmail = String(guestProfile?.email || '').trim();
       await addLog(
         registrationEmail
@@ -3361,6 +3997,11 @@ function FindProxyForURL(url, host) {
           );
         }
         if (isHostedCheckoutOpenAiCardDeclinedState(state)) {
+          if (runtimeConfig?.hostedCheckoutCardDeclinedRetryEnabled === false) {
+            throw new Error(
+              `${HOSTED_CHECKOUT_CARD_DECLINED_ERROR_PREFIX}步骤 6：hosted checkout 检测到银行卡被拒绝，且当前已关闭“拒卡重试”：${state.hostedCardDeclinedErrorMessage || '请尝试另一张卡。'}`
+            );
+          }
           if (hostedOpenAiCardDeclinedRetries >= HOSTED_CHECKOUT_OPENAI_ADDRESS_RETRY_MAX_ATTEMPTS) {
             throw new Error(
               `${HOSTED_CHECKOUT_CARD_DECLINED_ERROR_PREFIX}步骤 6：hosted checkout 连续出现银行卡被拒绝 ${HOSTED_CHECKOUT_OPENAI_ADDRESS_RETRY_MAX_ATTEMPTS} 次：${state.hostedCardDeclinedErrorMessage || '请尝试另一张卡。'}`
@@ -3395,6 +4036,11 @@ function FindProxyForURL(url, host) {
           continue;
         }
         if (isHostedCheckoutOpenAiAddressErrorState(state)) {
+          if (runtimeConfig?.hostedCheckoutCardDeclinedRetryEnabled === false) {
+            throw new Error(
+              `步骤 6：hosted checkout 检测到地址校验失败，且当前已关闭“拒卡重试”：${state.hostedAddressErrorMessage || '地址无法用于自动计算税费'}`
+            );
+          }
           if (hostedOpenAiAddressRetries >= HOSTED_CHECKOUT_OPENAI_ADDRESS_RETRY_MAX_ATTEMPTS) {
             throw new Error(`步骤 6：hosted checkout 地址校验连续失败 ${HOSTED_CHECKOUT_OPENAI_ADDRESS_RETRY_MAX_ATTEMPTS} 次：${state.hostedAddressErrorMessage || '地址无法用于自动计算税费'}`);
           }
@@ -3923,7 +4569,7 @@ function FindProxyForURL(url, host) {
       await addLog(`步骤 6：hosted checkout 初始电话配置为 ${runtimeConfig.phone || '(空)'}。`, 'info');
       await addLog(`步骤 6：hosted checkout 地址数据：${JSON.stringify(address)}`, 'info');
       let guestProfile = buildHostedCheckoutGuestProfile(address, runtimeConfig);
-      const openAiFlowResult = await runHostedCheckoutOpenAiFlow(tabId, guestProfile);
+      const openAiFlowResult = await runHostedCheckoutOpenAiFlow(tabId, guestProfile, runtimeConfig);
       if (openAiFlowResult?.guestProfile) {
         guestProfile = openAiFlowResult.guestProfile;
       }
@@ -4752,6 +5398,7 @@ function FindProxyForURL(url, host) {
         readCloudCheckoutAccessTokenWithRetry,
         refreshOAuthTimeoutWindowAfterHostedCheckoutSuccess,
         resolveActivePlusCheckoutProfile,
+        pollHostedCheckoutVerificationCode,
         shouldAutoRecoverPayPalApprovalBranch,
         shouldAutoRecoverPayPalGenericError,
         shouldClearPayPalSessionCookie,

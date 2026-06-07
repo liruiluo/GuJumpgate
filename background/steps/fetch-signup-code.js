@@ -22,6 +22,8 @@
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       CLOUD_MAIL_PROVIDER = 'cloudmail',
       FREEMAIL_PROVIDER = 'freemail',
+      MOEMAIL_PROVIDER = 'moemail',
+      YYDSMAIL_PROVIDER = 'yydsmail',
       OUTLOOK_EMAIL_PLUS_PROVIDER = 'outlook-email-plus',
       resolveVerificationStep,
       reuseOrCreateTab,
@@ -125,6 +127,8 @@
         || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER
         || mail.provider === CLOUD_MAIL_PROVIDER
         || mail.provider === FREEMAIL_PROVIDER
+        || mail.provider === MOEMAIL_PROVIDER
+        || mail.provider === YYDSMAIL_PROVIDER
         || mail.provider === OUTLOOK_EMAIL_PLUS_PROVIDER
       ) {
         await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
@@ -154,6 +158,8 @@
         CLOUDFLARE_TEMP_EMAIL_PROVIDER,
         CLOUD_MAIL_PROVIDER,
         FREEMAIL_PROVIDER,
+        MOEMAIL_PROVIDER,
+        YYDSMAIL_PROVIDER,
         OUTLOOK_EMAIL_PLUS_PROVIDER,
       ].includes(mail.provider);
       const signupProfile = buildSignupProfileForVerificationStep();

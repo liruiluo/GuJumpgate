@@ -152,7 +152,7 @@
     async function executeStep1() {
       await clearOpenAiCookiesBeforeStep1();
       await addLog('步骤 1：正在打开 ChatGPT 官网...');
-      await openSignupEntryTab(1);
+      await openSignupEntryTab(1, { forceNew: true });
       await completeNodeFromBackground('open-chatgpt', {});
     }
 

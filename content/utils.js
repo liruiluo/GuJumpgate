@@ -243,13 +243,27 @@ function waitForElementByText(containerSelector, textPattern, timeout = 10000) {
  * @param {HTMLInputElement} el
  * @param {string} value
  */
+function syncReactValueTracker(el, previousValue) {
+  const tracker = el?._valueTracker;
+  if (!tracker || typeof tracker.setValue !== 'function') {
+    return;
+  }
+  try {
+    tracker.setValue(String(previousValue ?? ''));
+  } catch {
+    // Ignore tracker sync failures and continue dispatching DOM events.
+  }
+}
+
 function fillInput(el, value) {
   throwIfStopped();
+  const previousValue = String(el?.value ?? '');
   const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
     window.HTMLInputElement.prototype,
     'value'
   ).set;
   nativeInputValueSetter.call(el, value);
+  syncReactValueTracker(el, previousValue);
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   console.log(LOG_PREFIX, `已填写输入框 ${el.name || el.id || el.type}: ${value}`);

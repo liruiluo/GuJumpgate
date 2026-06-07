@@ -348,6 +348,51 @@
     return okMatch ? extractVerificationCode(okMatch[1]) : '';
   }
 
+  function isJsonStatusPayload(payload) {
+    return Boolean(
+      payload
+      && typeof payload === 'object'
+      && !Array.isArray(payload)
+      && Object.prototype.hasOwnProperty.call(payload, 'code')
+      && (
+        Object.prototype.hasOwnProperty.call(payload, 'msg')
+        || Object.prototype.hasOwnProperty.call(payload, 'data')
+      )
+    );
+  }
+
+  function extractPayPalVerificationCodesFromSmsContent(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return [];
+    }
+    if (Number(payload.code) !== 0) {
+      return [];
+    }
+    const smsList = Array.isArray(payload?.data?.sms_content) ? payload.data.sms_content : [];
+    const codes = [];
+    for (const smsItem of smsList) {
+      const content = String(smsItem?.content || '').trim();
+      if (!content) {
+        continue;
+      }
+      const match = content.match(/PayPal:\s*(\d{6})\b/i);
+      if (match?.[1]) {
+        codes.push(match[1]);
+      }
+    }
+    return Array.from(new Set(codes));
+  }
+
+  function extractCodesFromPayload(payload) {
+    const codes = [];
+    const statusCode = extractCodeFromStatusText(describePayload(payload));
+    if (statusCode) {
+      codes.push(statusCode);
+    }
+    codes.push(...extractPayPalVerificationCodesFromSmsContent(payload));
+    return Array.from(new Set(codes.filter(Boolean)));
+  }
+
   async function captureExistingCodesForActivation(state = {}, activation, deps = {}) {
     const normalizedActivation = normalizeActivation(activation, activation);
     if (!normalizedActivation) {
@@ -358,8 +403,7 @@
         action: 'getStatus',
         id: normalizedActivation.activationId,
       }, 'SMSBower capture existing sms');
-      const code = extractCodeFromStatusText(describePayload(payload));
-      return code ? [code] : [];
+      return extractCodesFromPayload(payload);
     } catch {
       return [];
     }
@@ -433,10 +477,11 @@
         });
       }
 
-      const code = extractCodeFromStatusText(lastResponse);
-      if (code) {
-        if (!ignoredCodes.has(code)) {
-          return code;
+      const codes = extractCodesFromPayload(payload);
+      if (codes.length) {
+        const nextCode = codes.find((code) => !ignoredCodes.has(code));
+        if (nextCode) {
+          return nextCode;
         }
         if (!ignoredHistoricalCodeLogged) {
           ignoredHistoricalCodeLogged = true;
@@ -465,6 +510,20 @@
             elapsedMs: Date.now() - start,
             pollCount,
             statusText: lastResponse,
+            timeoutMs,
+          });
+        }
+        await deps.sleepWithStop(intervalMs);
+        continue;
+      }
+
+      if (isJsonStatusPayload(payload)) {
+        if (typeof options.onWaitingForCode === 'function') {
+          await options.onWaitingForCode({
+            activation: normalizedActivation,
+            elapsedMs: Date.now() - start,
+            pollCount,
+            statusText: lastResponse || 'PENDING',
             timeoutMs,
           });
         }

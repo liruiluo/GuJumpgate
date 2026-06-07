@@ -2045,6 +2045,7 @@
             fullName,
             email: registrationEmail,
             addressSeed,
+            skipContactEmailFill: true,
             autoCheckAgreement: Boolean(addressSeed.autoCheckAgreement),
           },
         });
@@ -2073,6 +2074,30 @@
         plusBillingCountryText: result?.countryText || '',
         plusBillingAddress: result?.structuredAddress || null,
       });
+      if (registrationEmail) {
+        const topLevelEmailResult = await sendFrameMessage(tabId, 0, {
+          type: 'PLUS_CHECKOUT_FILL_CONTACT_EMAIL',
+          source: 'background',
+          payload: {
+            email: registrationEmail,
+          },
+        }).catch(() => null);
+        if (topLevelEmailResult?.error) {
+          throw new Error(topLevelEmailResult.error);
+        }
+        if (topLevelEmailResult?.emailFillResult) {
+          const summary = JSON.stringify({
+            contactEmail: topLevelEmailResult?.contactEmail || registrationEmail || '',
+            found: Boolean(topLevelEmailResult.emailFillResult.found),
+            filled: Boolean(topLevelEmailResult.emailFillResult.filled),
+            alreadyFilled: Boolean(topLevelEmailResult.emailFillResult.alreadyFilled),
+            skipped: Boolean(topLevelEmailResult.emailFillResult.skipped),
+            reason: String(topLevelEmailResult.emailFillResult.reason || ''),
+            value: String(topLevelEmailResult.emailFillResult.value || ''),
+          });
+          await addLog(`步骤 7：checkout 顶层联系邮箱处理结果：${summary}`, 'info');
+        }
+      }
       await ensureFreeTrialAmount(tabId, state, {
         phaseLabel: '提交订阅前',
       });

@@ -14,6 +14,8 @@
   const ICLOUD_PROVIDER = 'icloud';
   const ICLOUD_API_PROVIDER = 'icloud-api';
   const FREEMAIL_PROVIDER = 'freemail';
+  const MOEMAIL_PROVIDER = 'moemail';
+  const YYDSMAIL_PROVIDER = 'yydsmail';
   const OUTLOOK_EMAIL_PLUS_PROVIDER = 'outlook-email-plus';
   const NETEASE_LIST_PATH = '/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D';
   const ICLOUD_TARGET_MAILBOX_TYPE_INBOX = 'icloud-inbox';
@@ -33,6 +35,8 @@
       case ICLOUD_PROVIDER:
       case ICLOUD_API_PROVIDER:
       case FREEMAIL_PROVIDER:
+      case MOEMAIL_PROVIDER:
+      case YYDSMAIL_PROVIDER:
       case OUTLOOK_EMAIL_PLUS_PROVIDER:
       case '163':
       case '163-vip':
@@ -134,6 +138,12 @@
     if (provider === FREEMAIL_PROVIDER) {
       return { provider: FREEMAIL_PROVIDER, label: 'freemail' };
     }
+    if (provider === MOEMAIL_PROVIDER) {
+      return { provider: MOEMAIL_PROVIDER, label: 'MoeMail' };
+    }
+    if (provider === YYDSMAIL_PROVIDER) {
+      return { provider: YYDSMAIL_PROVIDER, label: 'YYDS Mail' };
+    }
     if (provider === OUTLOOK_EMAIL_PLUS_PROVIDER) {
       return { provider: OUTLOOK_EMAIL_PLUS_PROVIDER, label: 'Outlook Email Plus' };
     }
@@ -184,6 +194,8 @@
     HOTMAIL_PROVIDER,
     ICLOUD_API_PROVIDER,
     ICLOUD_PROVIDER,
+    MOEMAIL_PROVIDER,
+    YYDSMAIL_PROVIDER,
     buildIcloudApiEndpoint,
     getIcloudForwardMailConfig,
     getIcloudForwardMailProviderOptions,

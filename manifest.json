@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GuJumpgate",
-  "version": "0.1.7",
-  "version_name": "GuJumpgate  V0.1.7",
+  "version": "0.1.9",
+  "version_name": "GuJumpgate  V0.1.9",
   "description": "用于自动执行多步骤 OAuth 注册流程",
   "permissions": [
     "sidePanel",
@@ -120,7 +120,8 @@
     {
       "matches": [
         "https://pay.openai.com/*",
-        "https://checkout.stripe.com/*"
+        "https://checkout.stripe.com/*",
+        "https://chatgpt.com/checkout/*"
       ],
       "js": [
         "content/activation-utils.js",
@@ -157,5 +158,6 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAgfY12Y7ZCIo4w39yVrnSqHSnD0kcslFtY0DP6mmBLWNNUZ2ZfRGeO4uRf0iaI0KIFaVG9CbmaHa+K/BnsQZXTs9U6AWMq5Gw2w/K7RbbDczZ8FkappkQus5fHYY9mDD5aeHfXzO6tVG9P72iww5viw7w99QiOslbTHysK4Qa2RQFHp1VTGW1jC/Y6BkA5i4Vgs7F3ht3/QfHkj5jzSShj5XprxO3fDjVoMxxZPquE1z8R6KAOwkQlUY7mT2q6s4+DJdaJs0gwzEReJiYk7VIo+T385jlnS8lBx4Sw5rg6pAa2y19RV7miIQCFDit/YS7EfynpQoiD7YGwKrraZ0+wQIDAQAB"
 }

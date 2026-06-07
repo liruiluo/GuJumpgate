@@ -56,10 +56,11 @@
       });
     }
 
-    async function openSignupEntryTab(step = 1) {
+    async function openSignupEntryTab(step = 1, options = {}) {
       const tabId = await reuseOrCreateTab('signup-page', SIGNUP_ENTRY_URL, {
         inject: SIGNUP_PAGE_INJECT_FILES,
         injectSource: 'signup-page',
+        forceNew: Boolean(options?.forceNew),
       });
 
       await waitForSignupEntryTabToSettle(tabId, step);
@@ -75,8 +76,8 @@
       return tabId;
     }
 
-    async function ensureSignupEntryPageReady(step = 1) {
-      const tabId = await openSignupEntryTab(step);
+    async function ensureSignupEntryPageReady(step = 1, options = {}) {
+      const tabId = await openSignupEntryTab(step, options);
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'ENSURE_SIGNUP_ENTRY_READY',
         step,

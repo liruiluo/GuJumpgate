@@ -70,10 +70,14 @@ importScripts(
   'cloudflare-temp-email-utils.js',
   'cloudmail-utils.js',
   'freemail-utils.js',
+  'moemail-utils.js',
+  'yydsmail-utils.js',
   'outlook-email-plus-utils.js',
   'background/freemail-provider.js',
   'background/outlook-email-plus-provider.js',
   'background/cloudmail-provider.js',
+  'background/moemail-provider.js',
+  'background/yydsmail-provider.js',
   'icloud-utils.js',
   'mail-provider-utils.js',
   'content/activation-utils.js'
@@ -349,6 +353,30 @@ const {
   normalizeFreemailMessages,
 } = self.FreemailUtils;
 const {
+  DEFAULT_MAIL_PAGE_SIZE: MOEMAIL_DEFAULT_PAGE_SIZE,
+  buildMoemailHeaders,
+  getMoemailAddressFromResponse,
+  getMoemailEmailIdFromResponse,
+  getMoemailNextCursor,
+  joinMoemailUrl,
+  normalizeMoemailAddress,
+  normalizeMoemailBaseUrl,
+  normalizeMoemailDomain,
+  normalizeMoemailDomains,
+  normalizeMoemailMailboxes,
+  normalizeMoemailMessages,
+} = self.MoemailUtils;
+const {
+  DEFAULT_MESSAGE_LIMIT: YYDSMAIL_DEFAULT_MESSAGE_LIMIT,
+  buildYydsMailHeaders,
+  getYydsMailAddressFromResponse,
+  joinYydsMailUrl,
+  normalizeYydsMailAddress,
+  normalizeYydsMailBaseUrl,
+  normalizeYydsMailDomain,
+  normalizeYydsMailMessages,
+} = self.YydsMailUtils;
+const {
   DEFAULT_OUTLOOK_EMAIL_PLUS_BASE_URL,
   buildOutlookEmailPlusAliasAddress,
   buildOutlookEmailPlusHeaders,
@@ -529,6 +557,10 @@ const CLOUD_MAIL_PROVIDER = 'cloudmail';
 const CLOUD_MAIL_GENERATOR = 'cloudmail';
 const FREEMAIL_PROVIDER = 'freemail';
 const FREEMAIL_GENERATOR = 'freemail';
+const MOEMAIL_PROVIDER = 'moemail';
+const MOEMAIL_GENERATOR = 'moemail';
+const YYDSMAIL_PROVIDER = 'yydsmail';
+const YYDSMAIL_GENERATOR = 'yydsmail';
 const OUTLOOK_EMAIL_PLUS_PROVIDER = 'outlook-email-plus';
 const OUTLOOK_EMAIL_PLUS_GENERATOR = 'outlook-email-plus';
 const CUSTOM_EMAIL_POOL_GENERATOR = 'custom-pool';
@@ -1109,6 +1141,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   hostedCheckoutPhoneNumber: '',
   hostedCheckoutSmsPoolText: '',
   hostedCheckoutSmsPoolUsage: {},
+  hostedCheckoutCardDeclinedRetryEnabled: true,
   hostedCheckoutSmsPoolAutoDisableEnabled: false,
   chatGptApiSmsPoolText: '',
   chatGptApiSmsPoolUsage: {},
@@ -1170,6 +1203,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunSkipFailures: false,
   autoRunRetryNonFreeTrial: false,
   autoRunRetryPaypalCallback: false,
+  autoRunRetryShortLinkError: true,
   autoRunFallbackThreadIntervalMinutes: 0,
   oauthFlowTimeoutEnabled: true,
   autoRunDelayEnabled: false,
@@ -1249,6 +1283,14 @@ const PERSISTED_SETTING_DEFAULTS = {
   freemailAdminPassword: '',
   freemailDomain: '',
   freemailDomains: [],
+  moemailBaseUrl: '',
+  moemailApiKey: '',
+  moemailDomain: '',
+  moemailDomains: [],
+  moemailEmailId: '',
+  yydsMailBaseUrl: '',
+  yydsMailApiKey: '',
+  yydsMailDomain: '',
   outlookEmailPlusBaseUrl: DEFAULT_OUTLOOK_EMAIL_PLUS_BASE_URL,
   outlookEmailPlusApiKey: '',
   outlookEmailPlusProvider: 'outlook',
@@ -1330,6 +1372,14 @@ const PLUS_CHECKOUT_PROFILE_SETTING_KEYS = Object.freeze([
   'hostedCheckoutPhoneNumber',
   'hostedCheckoutSmsPoolText',
   'hostedCheckoutSmsPoolUsage',
+  'hostedCheckoutCardDeclinedRetryEnabled',
+  'hostedCheckoutSmsPoolAutoDisableEnabled',
+  'hostedCheckoutFirstDirectResendEnabled',
+  'hostedCheckoutFirstResendWaitSeconds',
+  'hostedCheckoutSubsequentResendWaitSeconds',
+  'hostedCheckoutVerificationResendMaxAttempts',
+  'hostedCheckoutVerificationPollAttempts',
+  'hostedCheckoutVerificationPollIntervalSeconds',
 ]);
 const PLUS_CHECKOUT_MODE_VALUES = Object.freeze([
   PLUS_CHECKOUT_MODE_US_PP,
@@ -1342,6 +1392,14 @@ function buildDefaultPlusCheckoutProfile() {
     hostedCheckoutPhoneNumber: '',
     hostedCheckoutSmsPoolText: '',
     hostedCheckoutSmsPoolUsage: {},
+    hostedCheckoutCardDeclinedRetryEnabled: true,
+    hostedCheckoutSmsPoolAutoDisableEnabled: false,
+    hostedCheckoutFirstDirectResendEnabled: false,
+    hostedCheckoutFirstResendWaitSeconds: PERSISTED_SETTING_DEFAULTS.hostedCheckoutFirstResendWaitSeconds,
+    hostedCheckoutSubsequentResendWaitSeconds: PERSISTED_SETTING_DEFAULTS.hostedCheckoutSubsequentResendWaitSeconds,
+    hostedCheckoutVerificationResendMaxAttempts: PERSISTED_SETTING_DEFAULTS.hostedCheckoutVerificationResendMaxAttempts,
+    hostedCheckoutVerificationPollAttempts: PERSISTED_SETTING_DEFAULTS.hostedCheckoutVerificationPollAttempts,
+    hostedCheckoutVerificationPollIntervalSeconds: PERSISTED_SETTING_DEFAULTS.hostedCheckoutVerificationPollIntervalSeconds,
   };
 }
 
@@ -2627,6 +2685,9 @@ function normalizeAutoRunTimerPlan(plan) {
   const autoRunSkipFailures = Boolean(plan.autoRunSkipFailures);
   const autoRunRetryNonFreeTrial = Boolean(plan.autoRunRetryNonFreeTrial);
   const autoRunRetryPaypalCallback = Boolean(plan.autoRunRetryPaypalCallback);
+  const autoRunRetryShortLinkError = plan.autoRunRetryShortLinkError !== undefined
+    ? Boolean(plan.autoRunRetryShortLinkError)
+    : true;
   const mode = plan.mode === 'continue' ? 'continue' : 'restart';
   const currentRun = Math.max(0, Math.min(totalRuns, Math.floor(Number(plan.currentRun) || 0)));
   const attemptRun = Math.max(
@@ -2646,6 +2707,7 @@ function normalizeAutoRunTimerPlan(plan) {
       autoRunSkipFailures,
       autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError,
       mode,
       currentRun: 0,
       attemptRun: 0,
@@ -2666,6 +2728,7 @@ function normalizeAutoRunTimerPlan(plan) {
       autoRunSkipFailures,
       autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError,
       mode: 'restart',
       currentRun: normalizedCurrentRun,
       attemptRun: normalizedAttemptRun,
@@ -2685,6 +2748,7 @@ function normalizeAutoRunTimerPlan(plan) {
     autoRunSkipFailures,
     autoRunRetryNonFreeTrial,
     autoRunRetryPaypalCallback,
+    autoRunRetryShortLinkError,
     mode: 'restart',
     currentRun: normalizedCurrentRun,
     attemptRun: normalizedAttemptRun,
@@ -2717,6 +2781,7 @@ function normalizeAutoRunTimerPlanFromState(state = {}) {
     autoRunSkipFailures: state.scheduledAutoRunPlan?.autoRunSkipFailures ?? state.autoRunSkipFailures,
     autoRunRetryNonFreeTrial: state.scheduledAutoRunPlan?.autoRunRetryNonFreeTrial ?? state.autoRunRetryNonFreeTrial,
     autoRunRetryPaypalCallback: state.scheduledAutoRunPlan?.autoRunRetryPaypalCallback ?? state.autoRunRetryPaypalCallback,
+    autoRunRetryShortLinkError: state.scheduledAutoRunPlan?.autoRunRetryShortLinkError ?? state.autoRunRetryShortLinkError,
     autoRunSessionId: state.autoRunSessionId,
     mode: state.scheduledAutoRunPlan?.mode,
   });
@@ -2770,6 +2835,8 @@ function normalizeEmailGenerator(value = '') {
   if (normalized === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return CLOUDFLARE_TEMP_EMAIL_GENERATOR;
   if (normalized === CLOUD_MAIL_GENERATOR) return CLOUD_MAIL_GENERATOR;
   if (normalized === FREEMAIL_GENERATOR) return FREEMAIL_GENERATOR;
+  if (normalized === MOEMAIL_GENERATOR) return MOEMAIL_GENERATOR;
+  if (normalized === YYDSMAIL_GENERATOR) return YYDSMAIL_GENERATOR;
   if (normalized === OUTLOOK_EMAIL_PLUS_GENERATOR) return OUTLOOK_EMAIL_PLUS_GENERATOR;
   return 'duck';
 }
@@ -3275,6 +3342,8 @@ function normalizeMailProvider(value = '') {
     case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
     case CLOUD_MAIL_PROVIDER:
     case FREEMAIL_PROVIDER:
+    case MOEMAIL_PROVIDER:
+    case YYDSMAIL_PROVIDER:
     case OUTLOOK_EMAIL_PLUS_PROVIDER:
     case '163':
     case '163-vip':
@@ -3542,6 +3611,65 @@ const {
   pollFreemailVerificationCode,
   resolveFreemailPollTargetEmail,
 } = freemailProvider;
+const moemailProvider = self.MultiPageBackgroundMoemailProvider.createMoemailProvider({
+  addLog,
+  buildMoemailHeaders,
+  DEFAULT_MAIL_PAGE_SIZE: MOEMAIL_DEFAULT_PAGE_SIZE,
+  fetchImpl: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  getMoemailAddressFromResponse,
+  getMoemailEmailIdFromResponse,
+  getMoemailNextCursor,
+  getState,
+  joinMoemailUrl,
+  MOEMAIL_GENERATOR,
+  MOEMAIL_PROVIDER,
+  normalizeMoemailAddress,
+  normalizeMoemailBaseUrl,
+  normalizeMoemailDomain,
+  normalizeMoemailDomains,
+  normalizeMoemailMailboxes,
+  normalizeMoemailMessages,
+  persistRegistrationEmailState,
+  pickVerificationMessageWithTimeFallback,
+  setEmailState,
+  setPersistentSettings,
+  setState,
+  sleepWithStop,
+  throwIfStopped,
+});
+const {
+  getMoemailConfig,
+  fetchMoemailAddress,
+  pollMoemailVerificationCode,
+  resolveMoemailEmailId,
+  resolveMoemailPollTargetEmail,
+} = moemailProvider;
+const yydsMailProvider = self.MultiPageBackgroundYydsMailProvider.createYydsMailProvider({
+  addLog,
+  buildYydsMailHeaders,
+  DEFAULT_MESSAGE_LIMIT: YYDSMAIL_DEFAULT_MESSAGE_LIMIT,
+  fetchImpl: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  getState,
+  getYydsMailAddressFromResponse,
+  joinYydsMailUrl,
+  normalizeYydsMailAddress,
+  normalizeYydsMailBaseUrl,
+  normalizeYydsMailDomain,
+  normalizeYydsMailMessages,
+  persistRegistrationEmailState,
+  pickVerificationMessageWithTimeFallback,
+  setEmailState,
+  sleepWithStop,
+  throwIfStopped,
+  YYDSMAIL_GENERATOR,
+  YYDSMAIL_PROVIDER,
+});
+const {
+  getYydsMailConfig,
+  fetchYydsMailAddress,
+  pollYydsMailVerificationCode,
+  resolveYydsMailPollTargetEmail,
+} = yydsMailProvider;
 const outlookEmailPlusProvider = self.MultiPageBackgroundOutlookEmailPlusProvider.createOutlookEmailPlusProvider({
   addLog,
   broadcastDataUpdate,
@@ -3810,6 +3938,8 @@ function normalizePersistentSettingValue(key, value) {
           failureCount: Math.max(0, Math.floor(Number(item.failureCount) || 0)),
         }];
       }).filter(([key]) => Boolean(key)));
+    case 'hostedCheckoutCardDeclinedRetryEnabled':
+      return Boolean(value);
     case 'hostedCheckoutSmsPoolAutoDisableEnabled':
       return Boolean(value);
     case 'chatGptApiSmsPoolText':
@@ -3980,6 +4110,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'autoRunSkipFailures':
     case 'autoRunRetryNonFreeTrial':
     case 'autoRunRetryPaypalCallback':
+    case 'autoRunRetryShortLinkError':
     case 'oauthFlowTimeoutEnabled':
     case 'gopayHelperLocalSmsHelperEnabled':
     case 'gopayHelperAutoModeEnabled':
@@ -4037,6 +4168,12 @@ function normalizePersistentSettingValue(key, value) {
         }
         if (normalizedMailProvider === FREEMAIL_PROVIDER) {
           return FREEMAIL_PROVIDER;
+        }
+        if (normalizedMailProvider === MOEMAIL_PROVIDER) {
+          return MOEMAIL_PROVIDER;
+        }
+        if (normalizedMailProvider === YYDSMAIL_PROVIDER) {
+          return YYDSMAIL_PROVIDER;
         }
         if (normalizedMailProvider === ICLOUD_PROVIDER || normalizedMailProvider === ICLOUD_API_PROVIDER) {
           return normalizedMailProvider;
@@ -4145,6 +4282,22 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeFreemailDomain(value);
     case 'freemailDomains':
       return normalizeFreemailDomains(value);
+    case 'moemailBaseUrl':
+      return normalizeMoemailBaseUrl(value);
+    case 'moemailApiKey':
+      return String(value || '').trim();
+    case 'moemailDomain':
+      return normalizeMoemailDomain(value);
+    case 'moemailDomains':
+      return normalizeMoemailDomains(value);
+    case 'moemailEmailId':
+      return String(value || '').trim();
+    case 'yydsMailBaseUrl':
+      return normalizeYydsMailBaseUrl(value);
+    case 'yydsMailApiKey':
+      return String(value || '').trim();
+    case 'yydsMailDomain':
+      return normalizeYydsMailDomain(value);
     case 'outlookEmailPlusBaseUrl':
       return normalizeOutlookEmailPlusBaseUrl(value);
     case 'outlookEmailPlusApiKey':
@@ -4401,6 +4554,13 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
       domains.unshift(payload.cloudMailDomain);
     }
     payload.cloudMailDomains = domains;
+  }
+  if (payload.moemailDomains) {
+    const domains = normalizeMoemailDomains(payload.moemailDomains);
+    if (payload.moemailDomain && !domains.includes(payload.moemailDomain)) {
+      domains.unshift(payload.moemailDomain);
+    }
+    payload.moemailDomains = domains;
   }
   if (
     Object.prototype.hasOwnProperty.call(payload, 'sub2apiGroupName')
@@ -4746,6 +4906,20 @@ async function setEmailStateSilently(email, options = {}) {
         source: options?.source || '',
       });
   const normalizedEmail = updates.email;
+  const currentEmail = String(currentState?.email || '').trim() || null;
+  const currentMailProvider = String(currentState?.mailProvider || '').trim().toLowerCase();
+
+  if (options?.moemailEmailId !== undefined) {
+    updates.moemailEmailId = String(options.moemailEmailId || '').trim();
+  } else if (
+    currentMailProvider === MOEMAIL_PROVIDER
+    && String(normalizedEmail || '') !== String(currentEmail || '')
+  ) {
+    updates.moemailEmailId = '';
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'moemailEmailId')) {
+    await setPersistentSettings({ moemailEmailId: String(updates.moemailEmailId || '').trim() });
+  }
 
   if (!preserveAccountIdentity && normalizedEmail) {
     updates.accountIdentifierType = 'email';
@@ -11114,6 +11288,16 @@ function isHostedCheckoutVerificationResendLimitFailure(error) {
   return /HOSTED_CHECKOUT_VERIFICATION_RESEND_LIMIT::|PayPal 验证码自动 Resend 重试已达到上限|请尝试在页面手动获取验证码并填入/i.test(message);
 }
 
+function isHostedCheckoutCardDeclinedFailure(error) {
+  const message = getErrorMessage(error);
+  return /HOSTED_CHECKOUT_CARD_DECLINED::|hosted checkout[\s\S]*(?:银行卡被拒绝|card\s+(?:was\s+)?declined|请尝试另一张卡|已关闭“拒卡重试”)/i.test(message);
+}
+
+function isPlusCheckoutStartNewFlowFailure(error) {
+  const message = getErrorMessage(error);
+  return /PLUS_CHECKOUT_START_NEW_FLOW::/i.test(message);
+}
+
 function isCloudCheckoutAlreadyPaidFailure(error) {
   const message = getErrorMessage(error);
   return /\buser\s+is\s+already\s+paid\b|already\s+(?:paid|subscribed)|already\s+has\s+(?:an?\s+)?(?:active\s+)?subscription|(?:用户|账号|账户)[\s\S]*(?:已|已经)[\s\S]*(?:付费|订阅|开通)|(?:已|已经)[\s\S]*(?:付费|订阅|开通)[\s\S]*(?:用户|账号|账户)|该账号已经开通过\s*ChatGPT\s*订阅套餐/i.test(message);
@@ -11151,7 +11335,7 @@ function isPlusCheckoutRestartRequiredFailure(error) {
 }
 
 function shouldSchedulePayPalCookieCleanupBeforeCheckoutCreate(nodeId, state = {}, error = null) {
-  if (normalizePlusPaymentMethodForRun(state?.plusPaymentMethod) !== PLUS_PAYMENT_METHOD_PAYPAL) {
+  if (normalizePlusPaymentMethod(state?.plusPaymentMethod) !== PLUS_PAYMENT_METHOD_PAYPAL) {
     return false;
   }
   const normalizedNodeId = String(nodeId || '').trim();
@@ -11810,6 +11994,7 @@ function getAutoRunTimerResumeOptions(plan) {
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
         autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
+        autoRunRetryShortLinkError: normalizedPlan.autoRunRetryShortLinkError,
         mode: normalizedPlan.mode,
       },
       statusPayload: {
@@ -11829,6 +12014,7 @@ function getAutoRunTimerResumeOptions(plan) {
         autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
         autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
         autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
+        autoRunRetryShortLinkError: normalizedPlan.autoRunRetryShortLinkError,
         mode: 'restart',
         resumeCurrentRun: nextRun,
         resumeAttemptRun: 1,
@@ -11849,6 +12035,7 @@ function getAutoRunTimerResumeOptions(plan) {
       autoRunSkipFailures: normalizedPlan.autoRunSkipFailures,
       autoRunRetryNonFreeTrial: normalizedPlan.autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback: normalizedPlan.autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError: normalizedPlan.autoRunRetryShortLinkError,
       mode: 'restart',
       resumeCurrentRun: normalizedPlan.currentRun,
       resumeAttemptRun: normalizedPlan.attemptRun,
@@ -11945,6 +12132,7 @@ async function launchAutoRunTimerPlan(trigger = 'alarm', options = {}) {
         autoRunSkipFailures: plan.autoRunSkipFailures,
         autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
         autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
+        autoRunRetryShortLinkError: plan.autoRunRetryShortLinkError,
         autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
         autoRunTimerPlan: null,
         scheduledAutoRunPlan: null,
@@ -11997,6 +12185,7 @@ async function scheduleAutoRun(totalRuns, options = {}) {
     autoRunSkipFailures: options.autoRunSkipFailures,
     autoRunRetryNonFreeTrial: options.autoRunRetryNonFreeTrial,
     autoRunRetryPaypalCallback: options.autoRunRetryPaypalCallback,
+    autoRunRetryShortLinkError: options.autoRunRetryShortLinkError,
     autoRunSessionId: sessionId,
     mode: options.mode,
   });
@@ -12010,6 +12199,7 @@ async function scheduleAutoRun(totalRuns, options = {}) {
     autoRunSkipFailures: timerPlan.autoRunSkipFailures,
     autoRunRetryNonFreeTrial: timerPlan.autoRunRetryNonFreeTrial,
     autoRunRetryPaypalCallback: timerPlan.autoRunRetryPaypalCallback,
+    autoRunRetryShortLinkError: timerPlan.autoRunRetryShortLinkError,
     autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, []),
   });
   await addLog(
@@ -12083,6 +12273,7 @@ async function restoreAutoRunTimerIfNeeded() {
       autoRunSkipFailures: plan.autoRunSkipFailures,
       autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError: plan.autoRunRetryShortLinkError,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
     });
   } else {
@@ -12103,6 +12294,7 @@ async function restoreAutoRunTimerIfNeeded() {
       autoRunSkipFailures: plan.autoRunSkipFailures,
       autoRunRetryNonFreeTrial: plan.autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback: plan.autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError: plan.autoRunRetryShortLinkError,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(plan.totalRuns, plan.roundSummaries),
       autoRunTimerPlan: plan,
       scheduledAutoRunPlan: null,
@@ -13170,6 +13362,7 @@ async function requestStop(options = {}) {
       autoRunSkipFailures: timerPlan.autoRunSkipFailures,
       autoRunRetryNonFreeTrial: timerPlan.autoRunRetryNonFreeTrial,
       autoRunRetryPaypalCallback: timerPlan.autoRunRetryPaypalCallback,
+      autoRunRetryShortLinkError: timerPlan.autoRunRetryShortLinkError,
       autoRunRoundSummaries: serializeAutoRunRoundSummaries(timerPlan.totalRuns, timerPlan.roundSummaries),
       autoRunTimerPlan: null,
       scheduledAutoRunPlan: null,
@@ -13709,6 +13902,12 @@ async function fetchGeneratedEmail(state, options = {}) {
     freemailAdminUsername: options.freemailAdminUsername ?? currentState.freemailAdminUsername,
     freemailAdminPassword: options.freemailAdminPassword ?? currentState.freemailAdminPassword,
     freemailDomain: options.freemailDomain ?? currentState.freemailDomain,
+    moemailBaseUrl: options.moemailBaseUrl ?? currentState.moemailBaseUrl,
+    moemailApiKey: options.moemailApiKey ?? currentState.moemailApiKey,
+    moemailDomain: options.moemailDomain ?? currentState.moemailDomain,
+    yydsMailBaseUrl: options.yydsMailBaseUrl ?? currentState.yydsMailBaseUrl,
+    yydsMailApiKey: options.yydsMailApiKey ?? currentState.yydsMailApiKey,
+    yydsMailDomain: options.yydsMailDomain ?? currentState.yydsMailDomain,
   };
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
   if (generator === OUTLOOK_EMAIL_PLUS_GENERATOR) {
@@ -13719,6 +13918,12 @@ async function fetchGeneratedEmail(state, options = {}) {
   }
   if (generator === FREEMAIL_GENERATOR) {
     return fetchFreemailAddress(mergedState, options);
+  }
+  if (generator === MOEMAIL_GENERATOR) {
+    return fetchMoemailAddress(mergedState, options);
+  }
+  if (generator === YYDSMAIL_GENERATOR) {
+    return fetchYydsMailAddress(mergedState, options);
   }
   return generatedEmailHelpers.fetchGeneratedEmail(state, options);
 }
@@ -14944,6 +15149,135 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
         nodeIndex = Math.max(0, getNodeIndex(await getState(), 'plus-checkout-create'));
         continue;
       }
+      if (isPlusCheckoutRestartStep(step, nodeExecutionKey, latestState)
+        && isPlusCheckoutStartNewFlowFailure(err)
+        && (latestState?.autoRunRetryShortLinkError !== undefined
+          ? Boolean(latestState.autoRunRetryShortLinkError)
+          : true)) {
+        const reason = getErrorMessage(err);
+        if (
+          typeof markCurrentRegistrationAccountUsed === 'function'
+          && !shouldDeferHotmailUsedMarkForPhoneSignup(latestState)
+        ) {
+          await markCurrentRegistrationAccountUsed(latestState, {
+            reason: 'plus-checkout-error-new-flow',
+            logPrefix: 'Plus Checkout 红色错误框',
+            level: 'warn',
+          });
+        }
+        await addLog(
+          `节点 ${getNodeLabel(nodeId, latestState)}：检测到 Checkout 致命错误提示，准备放弃当前账号并回到节点 open-chatgpt 开始新流程。原因：${reason}`,
+          'warn'
+        );
+        await schedulePayPalCookieCleanupBeforeCheckoutCreateIfNeeded(nodeId, latestState, err);
+        let closedCheckoutTabs = 0;
+        if (chrome?.tabs?.remove) {
+          const checkoutTabIds = new Set();
+          const storedCheckoutTabId = Number(latestState?.plusCheckoutTabId) || 0;
+          const trackedCheckoutTabId = typeof getTabId === 'function'
+            ? Number(await getTabId('plus-checkout').catch(() => 0)) || 0
+            : 0;
+          const trackedPayPalTabId = typeof getTabId === 'function'
+            ? Number(await getTabId('paypal-flow').catch(() => 0)) || 0
+            : 0;
+          if (storedCheckoutTabId > 0) checkoutTabIds.add(storedCheckoutTabId);
+          if (trackedCheckoutTabId > 0) checkoutTabIds.add(trackedCheckoutTabId);
+          if (trackedPayPalTabId > 0) checkoutTabIds.add(trackedPayPalTabId);
+          if (chrome?.tabs?.query) {
+            const tabs = await chrome.tabs.query({}).catch(() => []);
+            for (const tab of tabs || []) {
+              const tabId = Number(tab?.id) || 0;
+              const url = String(tab?.url || '').trim();
+              if (!tabId || !url) continue;
+              if (/paypal\./i.test(url)
+                || /^https:\/\/(?:chatgpt\.com\/checkout|pay\.openai\.com\/c\/pay|checkout\.stripe\.com\/c\/pay)(?:\/|$)/i.test(url)
+                || /^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/(?:backend-api\/)?payments\/success(?:[/?#]|$)/i.test(url)) {
+                checkoutTabIds.add(tabId);
+              }
+            }
+          }
+          for (const tabId of checkoutTabIds) {
+            await chrome.tabs.remove(tabId).then(() => {
+              closedCheckoutTabs += 1;
+            }).catch(() => {});
+          }
+        }
+        if (closedCheckoutTabs > 0) {
+          await addLog(`节点 ${getNodeLabel(nodeId, latestState)}：开新流程前已关闭 ${closedCheckoutTabs} 个旧的 Checkout / PayPal 标签页。`, 'info');
+        }
+        await invalidateDownstreamAfterAutoRunNodeRestart('open-chatgpt', {
+          logLabel: `节点 ${nodeId} 检测到 Checkout 致命错误提示后准备回到 open-chatgpt 开新流程`,
+        });
+        const resetIdentityUpdates = {
+          ...buildClearedRegistrationEmailStateUpdates(latestState, {
+            preservePrevious: false,
+            preserveAccountIdentity: false,
+            source: 'plus-checkout-error-new-flow',
+          }),
+          password: '',
+          accountIdentifier: '',
+          accountIdentifierType: null,
+          signupPhoneNumber: '',
+          signupPhoneActivation: null,
+          signupPhoneCompletedActivation: null,
+          signupVerificationRequestedAt: null,
+          loginVerificationRequestedAt: null,
+          plusCheckoutTabId: null,
+          plusCheckoutUrl: '',
+          plusReturnUrl: '',
+        };
+        await setState(resetIdentityUpdates);
+        setRestartNode('open-chatgpt');
+        restartFromStep1WithCurrentEmail = true;
+        break;
+      }
+      if (isPlusCheckoutRestartStep(step, nodeExecutionKey, latestState)
+        && isPlusCheckoutStartNewFlowFailure(err)
+        && !((latestState?.autoRunRetryShortLinkError !== undefined
+          ? Boolean(latestState.autoRunRetryShortLinkError)
+          : true))) {
+        plusCheckoutRestartCount += 1;
+        if (plusCheckoutRestartCount > AUTO_RUN_MAX_RETRIES_PER_ROUND) {
+          await addLog(
+            `节点 ${getNodeLabel(nodeId, latestState)}：短链报错自动重开已关闭，Plus Checkout 已连续重建 ${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次仍命中短链错误提示，停止当前轮。原因：${getErrorMessage(err)}`,
+            'error'
+          );
+          throw err;
+        }
+        await addLog(
+          `节点 ${getNodeLabel(nodeId, latestState)}：短链报错自动重开已关闭，检测到 Checkout 致命错误提示，准备回到节点 plus-checkout-create 重新创建 Plus Checkout（第 ${plusCheckoutRestartCount}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次）。原因：${getErrorMessage(err)}`,
+          'warn'
+        );
+        const checkoutResetAnchorNodeId = getPreviousNodeId('plus-checkout-create', latestState) || 'fill-profile';
+        await invalidateDownstreamAfterAutoRunNodeRestart(checkoutResetAnchorNodeId, {
+          logLabel: `节点 ${nodeId} 检测到短链错误提示后准备回到 plus-checkout-create 重试（第 ${plusCheckoutRestartCount}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次）`,
+        });
+        await schedulePayPalCookieCleanupBeforeCheckoutCreateIfNeeded(nodeId, latestState, err);
+        nodeIndex = Math.max(0, getNodeIndex(await getState(), 'plus-checkout-create'));
+        continue;
+      }
+      if (isPlusCheckoutRestartStep(step, nodeExecutionKey, latestState)
+        && isHostedCheckoutCardDeclinedFailure(err)) {
+        plusCheckoutRestartCount += 1;
+        if (plusCheckoutRestartCount > AUTO_RUN_MAX_RETRIES_PER_ROUND) {
+          await addLog(
+            `节点 ${getNodeLabel(nodeId, latestState)}：Plus Checkout 已连续重建 ${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次仍命中拒卡/拒卡关闭类错误，停止当前轮。原因：${getErrorMessage(err)}`,
+            'error'
+          );
+          throw err;
+        }
+        await addLog(
+          `节点 ${getNodeLabel(nodeId, latestState)}：检测到拒卡/拒卡关闭类错误，准备回到节点 plus-checkout-create 重新创建 Plus Checkout（第 ${plusCheckoutRestartCount}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次）。原因：${getErrorMessage(err)}`,
+          'warn'
+        );
+        const checkoutResetAnchorNodeId = getPreviousNodeId('plus-checkout-create', latestState) || 'fill-profile';
+        await invalidateDownstreamAfterAutoRunNodeRestart(checkoutResetAnchorNodeId, {
+          logLabel: `节点 ${nodeId} 检测到拒卡/拒卡关闭类错误后准备回到 plus-checkout-create 重试（第 ${plusCheckoutRestartCount}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次）`,
+        });
+        await schedulePayPalCookieCleanupBeforeCheckoutCreateIfNeeded(nodeId, latestState, err);
+        nodeIndex = Math.max(0, getNodeIndex(await getState(), 'plus-checkout-create'));
+        continue;
+      }
       const isGpcCheckoutStep = normalizePlusPaymentMethodForRun(latestState?.plusPaymentMethod) === plusPaymentMethodGpcHelper
         || String(latestState?.plusCheckoutSource || '').trim() === plusPaymentMethodGpcHelper;
       if (isPlusCheckoutRestartStep(step, nodeExecutionKey, latestState)
@@ -15172,6 +15506,9 @@ async function resumeAutoRun() {
     autoRunSkipFailures: Boolean(state.autoRunSkipFailures),
     autoRunRetryNonFreeTrial: Boolean(state.autoRunRetryNonFreeTrial),
     autoRunRetryPaypalCallback: Boolean(state.autoRunRetryPaypalCallback),
+    autoRunRetryShortLinkError: state.autoRunRetryShortLinkError !== undefined
+      ? Boolean(state.autoRunRetryShortLinkError)
+      : true,
     mode: 'continue',
     resumeCurrentRun: currentRun,
     resumeAttemptRun: attemptRun,
@@ -15259,6 +15596,8 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   CLOUD_MAIL_PROVIDER,
   FREEMAIL_PROVIDER,
   ICLOUD_API_PROVIDER,
+  MOEMAIL_PROVIDER,
+  YYDSMAIL_PROVIDER,
   OUTLOOK_EMAIL_PLUS_PROVIDER,
   completeNodeFromBackground,
   confirmCustomVerificationStepBypassRequest: (step) => chrome.runtime.sendMessage({
@@ -15282,6 +15621,8 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   pollCloudMailVerificationCode,
   pollFreemailVerificationCode,
   pollIcloudApiVerificationCode,
+  pollMoemailVerificationCode,
+  pollYydsMailVerificationCode,
   pollOutlookEmailPlusVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,
@@ -15427,6 +15768,8 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   CLOUD_MAIL_PROVIDER,
   FREEMAIL_PROVIDER,
+  MOEMAIL_PROVIDER,
+  YYDSMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
   sendToContentScript,
@@ -15486,6 +15829,8 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   CLOUD_MAIL_PROVIDER,
   FREEMAIL_PROVIDER,
+  MOEMAIL_PROVIDER,
+  YYDSMAIL_PROVIDER,
   completeNodeFromBackground,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureMail2925MailboxSession,
@@ -16016,12 +16361,12 @@ async function requestSub2ApiOAuthUrl(state, options = {}) {
   return panelBridge.requestSub2ApiOAuthUrl(state, options);
 }
 
-async function openSignupEntryTab(step = 1) {
-  return signupFlowHelpers.openSignupEntryTab(step);
+async function openSignupEntryTab(step = 1, options = {}) {
+  return signupFlowHelpers.openSignupEntryTab(step, options);
 }
 
-async function ensureSignupEntryPageReady(step = 1) {
-  return signupFlowHelpers.ensureSignupEntryPageReady(step);
+async function ensureSignupEntryPageReady(step = 1, options = {}) {
+  return signupFlowHelpers.ensureSignupEntryPageReady(step, options);
 }
 
 async function ensureSignupAuthEntryPageReady(step = 1) {
@@ -16123,6 +16468,12 @@ function getMailConfig(state) {
   }
   if (provider === FREEMAIL_PROVIDER) {
     return { provider: FREEMAIL_PROVIDER, label: 'freemail' };
+  }
+  if (provider === MOEMAIL_PROVIDER) {
+    return { provider: MOEMAIL_PROVIDER, label: 'MoeMail' };
+  }
+  if (provider === YYDSMAIL_PROVIDER) {
+    return { provider: YYDSMAIL_PROVIDER, label: 'YYDS Mail' };
   }
   if (provider === OUTLOOK_EMAIL_PLUS_PROVIDER) {
     return { provider: OUTLOOK_EMAIL_PLUS_PROVIDER, label: 'Outlook Email Plus' };

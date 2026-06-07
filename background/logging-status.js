@@ -36,6 +36,8 @@
         'cloudflare-temp-email': 'Cloudflare Temp Email',
         'cloudmail': 'Cloud Mail',
         'freemail': 'freemail',
+        'moemail': 'MoeMail',
+        'yydsmail': 'YYDS Mail',
         'outlook-email-plus': 'Outlook Email Plus',
         'plus-checkout': 'Plus Checkout',
         'paypal-flow': 'PayPal 授权页',
